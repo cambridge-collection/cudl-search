@@ -133,15 +133,15 @@ def get_items(q: List[str] = Query(default=None),
     r = re.compile("^collection:")
     fq_filtered = list(filter(r.match, fq))
     collection_facet = fq_filtered[0] if fq_filtered else None
-    if sort and re.search(r'^collection_sort', sort):
+    if sort and re.search(r'collection_sort', sort):
         original_sort = sort
         if collection_facet:
-            if sort and re.search(r'collection_sort\s*(asc|desc)', sort.strip()):
+            if sort and re.search(r'collection_sort\s+(asc|desc)', sort.strip()):
                 collection_name_raw = re.sub(r'^collection:', '', collection_facet)
                 collection_name = re.sub(r'\s', '_', collection_name_raw)
                 sort_field = "%s_sort" % collection_name
-                sort_direction = re.sub(r'^.*collection_sort (asc|desc).*$', r'\1', sort)
-                sort = " ".join((sort_field, sort_direction))
+                sort = re.sub(r'(^|\s|,)collection_sort\s+(asc|desc)', r'\1%s \2' % sort_field, sort)
+
     q_final = ' AND '.join(q) if hasattr(q, '__iter__') else q
     rows_final = rows if rows in [8, 20] else 20
 
