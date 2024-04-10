@@ -54,7 +54,7 @@ def delete_resource(resource_type: str, file_id: str):
 def get_request(resource_type: str, **kwargs):
     core = get_core_name(resource_type)
     try:
-        solr_params = kwargs
+        solr_params = kwargs.copy()
         if 'original_sort' in solr_params:
             del solr_params['original_sort']
         r = requests.get("%s/solr/%s/select" % (SOLR_URL, core), params=solr_params)
@@ -65,9 +65,10 @@ def get_request(resource_type: str, **kwargs):
             raise HTTPException(status_code=results["responseHeader"]["status"], detail=results["error"]["msg"])
         else:
             raise HTTPException(status_code=502, detail=str(e).split(':')[-1])
-    if 'original_sort' in kwargs and 'sort' in r.json()['responseHeader']['params']:
-        r.json()['responseHeader']['params']['sort'] = kwargs["original_sort"]
-    return r.json()
+    result = r.json()
+    if 'original_sort' in kwargs and 'sort' in result['responseHeader']['params']:
+        result['responseHeader']['params']['sort'] = kwargs["original_sort"]
+    return result
 
 
 def put_item(resource_type: str, data, params):
