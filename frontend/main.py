@@ -3,6 +3,7 @@
 import json
 import logging
 import re
+import os
 import requests
 import urllib.parse
 from typing import Union, List
@@ -10,8 +11,8 @@ from fastapi import FastAPI, Request, Query, HTTPException
 
 logger = logging.getLogger(__name__)
 
-SOLR_HOST = "localhost"
-SOLR_PORT = 8983
+SOLR_HOST = os.environ['SOLR_HOST']
+SOLR_PORT = os.environ['SOLR_PORT']
 SOLR_URL = 'http://%s:%s' % (SOLR_HOST, SOLR_PORT)
 
 INTERNAL_ERROR_STATUS_CODE = '999'

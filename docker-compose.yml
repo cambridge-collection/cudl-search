@@ -1,0 +1,13 @@
+version: "3"
+services:
+  cudl-search-api:
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cudl-search-api
+    environment:
+      SOLR_HOST: host.docker.internal
+      SOLR_PORT: 8983
+    ports:
+      - 80:80
