@@ -52,7 +52,8 @@ def delete_resource(resource_type: str, file_id: str):
     if core:
         r = requests.post(url="%s/solr/%s/update" % (SOLR_URL, core),
                           headers={"content-type": "application/json; charset=UTF-8"},
-                          json=delete_cmd)
+                          json=delete_cmd,
+                          timeout=60)
         status_code = r.status_code
     else:
         status_code = INTERNAL_ERROR_STATUS_CODE
@@ -66,7 +67,7 @@ def get_request(resource_type: str, **kwargs):
         solr_params = kwargs.copy()
         if 'original_sort' in solr_params:
             del solr_params['original_sort']
-        r = requests.get("%s/solr/%s/select" % (SOLR_URL, core), params=solr_params)
+        r = requests.get("%s/solr/%s/select" % (SOLR_URL, core), params=solr_params, timeout=60)
         r.raise_for_status()
     except requests.exceptions.RequestException as e:
         if hasattr(e.response, 'text'):
@@ -87,7 +88,8 @@ def put_item(resource_type: str, data, params):
         r = requests.post(url="%s/solr/%s/%s" % (SOLR_URL, core, path),
                           params=params,
                           headers={"content-type": "application/json; charset=UTF-8"},
-                          data=data)
+                          data=data,
+                          timeout=60)
         r.raise_for_status()
     except requests.exceptions.RequestException as e:
         raise e
