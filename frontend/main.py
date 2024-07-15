@@ -23,7 +23,7 @@ else:
 
 SOLR_URL = 'http://%s:%s' % (SOLR_HOST, SOLR_PORT)
 
-INTERNAL_ERROR_STATUS_CODE = '999'
+INTERNAL_ERROR_STATUS_CODE = 500
 
 # Core names
 ITEM_CORE = 'cdcp'
@@ -203,9 +203,9 @@ async def update_collection(request: Request):
         logger.info(f"Indexing %s" % url_slug)
         status_code = put_item('collection', data, {'f': ['$FQN:/**', 'id:/name/url-slug']})
     else:
-        logger.info(f"Collection JSON does not seem to conform to expectations")
+        logger.info(f"ERROR: Collection JSON does not seem to conform to expectations")
         # I wasn't sure what status_code to use for invalid document.
-        status_code = '999'
+        status_code = INTERNAL_ERROR_STATUS_CODE
     return status_code
 
 
@@ -219,9 +219,9 @@ async def update_item(request: Request):
         logger.info(f"Indexing %s" % json_dict['fileID'])
         status_code = put_item('item', data, {'split': '/pages', 'f': ['/pages/*', '/*']})
     else:
-        logger.info(f"JSON does not seem to conform to expectations: %s" % json_dict['fileID'])
+        logger.info(f"ERROR: JSON does not seem to conform to expectations: %s" % json_dict['fileID'])
         # I wasn't sure what status_code to use for invalid document.
-        status_code = '999'
+        status_code = INTERNAL_ERROR_STATUS_CODE
     return status_code
 
 
