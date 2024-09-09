@@ -67,7 +67,7 @@ def get_request(resource_type: str, **kwargs):
         solr_params = kwargs.copy()
         if 'original_sort' in solr_params:
             del solr_params['original_sort']
-        r = requests.get("%s/solr/%s/select" % (SOLR_URL, core), params=solr_params, timeout=60)
+        r = requests.get("%s/solr/%s/spell" % (SOLR_URL, core), params=solr_params, timeout=60)
         r.raise_for_status()
     except requests.exceptions.RequestException as e:
         if hasattr(e.response, 'text'):
