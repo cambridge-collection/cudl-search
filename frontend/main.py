@@ -9,7 +9,7 @@ import urllib.parse
 from typing import Union, List
 from fastapi import FastAPI, Request, Query, HTTPException
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('gunicorn.error')
 
 if 'SOLR_HOST' in os.environ:
     SOLR_HOST = os.environ['SOLR_HOST']
