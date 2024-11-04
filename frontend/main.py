@@ -215,7 +215,7 @@ async def update_item(request: Request):
     data = await request.body()
 
     json_dict = json.loads(data)
-    if json_dict['descriptiveMetadata']:
+    if json_dict['pages']:
         logger.info(f"Indexing %s" % json_dict['fileID'])
         status_code = put_item('item', data, {'split': '/pages', 'f': ['/pages/*', '/*']})
     else:
