@@ -11,3 +11,11 @@ services:
       NUM_WORKERS: 5
     ports:
       - ${API_PORT}:${API_PORT}
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '1'
+          memory: 1G
