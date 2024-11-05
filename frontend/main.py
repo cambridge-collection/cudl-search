@@ -44,7 +44,7 @@ def get_core_name(resource_type: str):
     return core
 
 
-def delete_resource(resource_type: str, file_id: str):
+async def delete_resource(resource_type: str, file_id: str):
     delete_query = "fileID:%s" % file_id
     delete_cmd = {'delete': {'query': delete_query}}
 
@@ -61,7 +61,7 @@ def delete_resource(resource_type: str, file_id: str):
     return status_code
 
 
-def get_request(resource_type: str, **kwargs):
+async def get_request(resource_type: str, **kwargs):
     core = get_core_name(resource_type)
     try:
         solr_params = kwargs.copy()
@@ -81,7 +81,7 @@ def get_request(resource_type: str, **kwargs):
     return result
 
 
-def put_item(resource_type: str, data, params):
+async def put_item(resource_type: str, data, params):
     core = get_core_name(resource_type)
     path = 'update/json/docs'
     try:
@@ -130,12 +130,12 @@ async def get_collections(q: List[str] = Query(default=None),
     # Limit params passed through to SOLR
     # Add facet to exclude collections from results
     params = {"q": q_final, "fq": fq, "sort": sort, "start": start, "rows": rows_final}
-    r = get_request('collections', **params)
+    r = await get_request('collections', **params)
     return r
 
 
 @app.get("/items")
-def get_items(q: List[str] = Query(default=None),
+async def get_items(q: List[str] = Query(default=None),
               fq: List[str] = Query(default=None),
               sort: Union[str, None] = None,
               start: Union[str, None] = None,
@@ -163,19 +163,19 @@ def get_items(q: List[str] = Query(default=None),
     # Limit params passed through to SOLR
     # Add facet to exclude collections from results
     params = {"q": q_final, "fq": fq, "sort": sort, "start": start, "rows": rows_final, "original_sort": original_sort}
-    r = get_request('items', **params)
+    r = await get_request('items', **params)
     return r
 
 
 @app.get("/summary")
-def get_summary(q: List[str] = Query(default=None),
+async def get_summary(q: List[str] = Query(default=None),
                 fq: Union[str, None] = None):
     q_final = ' AND '.join(q) if hasattr(q, '__iter__') else q
 
     # Very few params are relevant to the summary view
     params = {"q": q_final, "fq": fq}
 
-    r = get_request('items', **params)
+    r = await get_request('items', **params)
 
     # This query returns the first page of results and the areas of the response that will
     # principally be useful are the responseHeader, response (but not response > docs),
@@ -201,7 +201,7 @@ async def update_collection(request: Request):
     if json_dict['name']:
         url_slug = json_dict['name']["url-slug"]
         logger.info(f"Indexing %s" % url_slug)
-        status_code = put_item('collection', data, {'f': ['$FQN:/**', 'id:/name/url-slug']})
+        status_code = await put_item('collection', data, {'f': ['$FQN:/**', 'id:/name/url-slug']})
     else:
         logger.info(f"ERROR: Collection JSON does not seem to conform to expectations")
         # I wasn't sure what status_code to use for invalid document.
@@ -217,7 +217,7 @@ async def update_item(request: Request):
     json_dict = json.loads(data)
     if json_dict['pages']:
         logger.info(f"Indexing %s" % json_dict['fileID'])
-        status_code = put_item('item', data, {'split': '/pages', 'f': ['/pages/*', '/*']})
+        status_code = await put_item('item', data, {'split': '/pages', 'f': ['/pages/*', '/*']})
     else:
         logger.info(f"ERROR: JSON does not seem to conform to expectations: %s" % json_dict['fileID'])
         # I wasn't sure what status_code to use for invalid document.
@@ -226,10 +226,10 @@ async def update_item(request: Request):
 
 
 @app.delete("/item/{file_id}")
-def delete_item(file_id: str):
-    return delete_resource('item', file_id)
+async def delete_item(file_id: str):
+    return await delete_resource('item', file_id)
 
 
 @app.delete("/collection/{file_id}")
-def delete_collection(file_id: str):
-    return delete_resource('collection', file_id)
+async def delete_collection(file_id: str):
+    return await delete_resource('collection', file_id)
