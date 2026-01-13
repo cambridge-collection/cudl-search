@@ -169,11 +169,12 @@ async def get_items(q: List[str] = Query(default=None),
 
 @app.get("/summary")
 async def get_summary(q: List[str] = Query(default=None),
-                fq: Union[str, None] = None):
+                fq: Union[str, None] = None,
+                facet_field: List[str] = Query(default=None, alias="facet.field")):
     q_final = ' AND '.join(q) if hasattr(q, '__iter__') else q
 
     # Very few params are relevant to the summary view
-    params = {"q": q_final, "fq": fq}
+    params = {"q": q_final, "fq": fq, "facet.field": facet_field}
 
     r = await get_request('items', **params)
 
