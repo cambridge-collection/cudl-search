@@ -174,17 +174,9 @@ async def get_summary(q: List[str] = Query(default=None),
     q_final = ' AND '.join(q) if hasattr(q, '__iter__') else q
 
     # Very few params are relevant to the summary view
-    params = {"q": q_final, "fq": fq, "facet.field": facet_field}
+    params = {"q": q_final, "fq": fq, "rows": 0, "facet.field": facet_field}
 
     r = await get_request('items', **params)
-
-    # This query returns the first page of results and the areas of the response that will
-    # principally be useful are the responseHeader, response (but not response > docs),
-    # facet_counts and possibly highlighting (i.e. snippets).
-    # Ultimately, we would change the data structure at this point to the common
-    # format needed. Rather than spend time doing  this, I just deleted the docs, which
-    # we wouldn't use in this view
-    del r['response']['docs']
     return r
 
 
