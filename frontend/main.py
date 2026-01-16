@@ -121,6 +121,11 @@ def ensure_urlencoded(var, safe=''):
 @app.get("/collections")
 async def get_collections(q: List[str] = Query(default=None),
                           fq: List[str] = Query(default=None),
+                          spellcheck: Union[bool, None] = None,
+                          facet: Union[bool, None] = None,
+                          omitHeader: Union[bool, None] = None,
+                          echoParams: Union[str, None] = None,
+                          hl: Union[bool, None] = None,
                           sort: Union[str, None] = None,
                           start: Union[str, None] = None,
                           rows: Union[int, None] = None):
@@ -129,7 +134,7 @@ async def get_collections(q: List[str] = Query(default=None),
 
     # Limit params passed through to SOLR
     # Add facet to exclude collections from results
-    params = {"q": q_final, "fq": fq, "sort": sort, "start": start, "rows": rows_final}
+    params = {"q": q_final, "fq": fq, "sort": sort, "start": start, "rows": rows_final, "spellcheck": spellcheck, "facet": facet, "hl": hl, "omitHeader": omitHeader, "echoParams": echoParams}
     r = await get_request('collections', **params)
     return r
 
