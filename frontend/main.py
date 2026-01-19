@@ -121,6 +121,11 @@ def ensure_urlencoded(var, safe=''):
 @app.get("/collections")
 async def get_collections(q: List[str] = Query(default=None),
                           fq: List[str] = Query(default=None),
+                          spellcheck: Union[bool, None] = None,
+                          facet: Union[bool, None] = None,
+                          omitHeader: Union[bool, None] = None,
+                          echoParams: Union[str, None] = None,
+                          hl: Union[bool, None] = None,
                           sort: Union[str, None] = None,
                           start: Union[str, None] = None,
                           rows: Union[int, None] = None):
@@ -129,7 +134,7 @@ async def get_collections(q: List[str] = Query(default=None),
 
     # Limit params passed through to SOLR
     # Add facet to exclude collections from results
-    params = {"q": q_final, "fq": fq, "sort": sort, "start": start, "rows": rows_final}
+    params = {"q": q_final, "fq": fq, "sort": sort, "start": start, "rows": rows_final, "spellcheck": spellcheck, "facet": facet, "hl": hl, "omitHeader": omitHeader, "echoParams": echoParams}
     r = await get_request('collections', **params)
     return r
 
@@ -169,21 +174,14 @@ async def get_items(q: List[str] = Query(default=None),
 
 @app.get("/summary")
 async def get_summary(q: List[str] = Query(default=None),
-                fq: Union[str, None] = None):
+                fq: Union[str, None] = None,
+                facet_field: List[str] = Query(default=None, alias="facet.field")):
     q_final = ' AND '.join(q) if hasattr(q, '__iter__') else q
 
     # Very few params are relevant to the summary view
-    params = {"q": q_final, "fq": fq}
+    params = {"q": q_final, "fq": fq, "rows": 0, "facet.field": facet_field}
 
     r = await get_request('items', **params)
-
-    # This query returns the first page of results and the areas of the response that will
-    # principally be useful are the responseHeader, response (but not response > docs),
-    # facet_counts and possibly highlighting (i.e. snippets).
-    # Ultimately, we would change the data structure at this point to the common
-    # format needed. Rather than spend time doing  this, I just deleted the docs, which
-    # we wouldn't use in this view
-    del r['response']['docs']
     return r
 
 
