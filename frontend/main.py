@@ -6,6 +6,7 @@ import re
 import os
 import requests
 import urllib.parse
+from datetime import datetime, timezone
 from typing import Union, List
 from fastapi import FastAPI, Request, Query, HTTPException
 
@@ -30,6 +31,25 @@ ITEM_CORE = 'cdcp'
 COLLECTION_JSON_CORE = 'collection'
 
 app = FastAPI()
+
+FACET_LABELS = {
+    "facet-collection": "Collection",
+    "facet-subjects": "Subjects",
+    "facet-pageHasTranscription": "Has transcription",
+    "facet-pageHasTranslation": "Has translation",
+    "facet-origin-place": "Origin place",
+    "facet-languages": "Languages",
+    "facet-creations-century": "Creation century",
+    "facet-hasImage": "Has image",
+}
+
+METRIC_LABELS = {
+    "pages": "Total pages",
+    "manuscripts": "Total manuscripts",
+    "pageHasTranscription": "Pages with transcription",
+    "pageHasTranslation": "Pages with translation",
+    "hasImage": "Pages Imaged",
+}
 
 
 def get_core_name(resource_type: str):
@@ -118,6 +138,180 @@ def ensure_urlencoded(var, safe=''):
         return dict_new
 
 
+def solr_facet_pairs_to_dict(pairs):
+    if not pairs:
+        return {}
+    facet_dict = {}
+    for i in range(0, len(pairs), 2):
+        if i + 1 >= len(pairs):
+            break
+        label = pairs[i]
+        count = pairs[i + 1]
+        facet_dict[str(label)] = int(count) if count is not None else 0
+    return facet_dict
+
+
+def get_true_count(facet_dict):
+    if not facet_dict:
+        return 0
+    for label, count in facet_dict.items():
+        if str(label).lower() in ['true','yes']:
+            return int(count) if count is not None else 0
+    return 0
+
+
+def build_sdmx_summary(solr_response):
+    facet_fields_raw = solr_response.get("facet_counts", {}).get("facet_fields", {}) or {}
+    # facet-itemLevel and facet-hasPage are excluded from the facets dataset but used for service stats.
+    excluded_facets = {"facet-itemLevel", "facet-hasPage"}
+    facet_names = [name for name in facet_fields_raw.keys() if name not in excluded_facets]
+
+    structures = []
+    data_sets = []
+
+    def make_value_code(label, used_codes):
+        base = re.sub(r"[^A-Za-z0-9_@$-]+", "_", str(label)).strip("_")
+        code = re.sub(r"[^A-Za-z0-9_@$-]+", "_", str(base)).strip("_")
+        if not code:
+            code = "value"
+        candidate = code
+        counter = 1
+        while candidate in used_codes:
+            candidate = f"{code}_{counter}"
+            counter += 1
+        used_codes.add(candidate)
+        return candidate
+
+    pages = int(solr_response.get("response", {}).get("numFound") or 0)
+    manuscripts = get_true_count(solr_facet_pairs_to_dict(facet_fields_raw.get("facet-itemLevel")))
+    page_has_transcription = get_true_count(solr_facet_pairs_to_dict(facet_fields_raw.get("facet-pageHasTranscription")))
+    page_has_translation = get_true_count(solr_facet_pairs_to_dict(facet_fields_raw.get("facet-pageHasTranslation")))
+    has_image = get_true_count(solr_facet_pairs_to_dict(facet_fields_raw.get("facet-hasImage")))
+
+    metric_codes = ["pages", "manuscripts", "pageHasTranscription", "pageHasTranslation", "hasImage"]
+    observations_service = {
+        "0": [pages],
+        "1": [manuscripts],
+        "2": [page_has_transcription],
+        "3": [page_has_translation],
+        "4": [has_image],
+    }
+
+    service_structure = {
+        "links": [],
+        "name": "service_stats",
+        "dimensions": {
+            "dataSet": [],
+            "series": [],
+            "observation": [
+                {
+                    "id": "metric",
+                    "name": "metric",
+                    "keyPosition": 0,
+                    "values": [{"id": code, "name": METRIC_LABELS.get(code, code)} for code in metric_codes],
+                }
+            ],
+        },
+        "measures": {
+            "observation": [
+                {
+                    "id": "count",
+                    "name": "count",
+                }
+            ]
+        },
+        "attributes": {
+            "dataSet": [],
+            "series": [],
+            "observation": [],
+        },
+    }
+    service_structure_index = len(structures)
+    structures.append(service_structure)
+    data_sets.append(
+        {
+            "structure": service_structure_index,
+            "action": "Information",
+            "observations": observations_service,
+        }
+    )
+
+    for facet_name in facet_names:
+        pairs = facet_fields_raw.get(facet_name) or []
+        value_entries = []
+        observations = {}
+        used_value_codes = set()
+        for i in range(0, len(pairs), 2):
+            if i + 1 >= len(pairs):
+                break
+            label = pairs[i]
+            label_str = str(label)
+            code = make_value_code(label_str, used_value_codes)
+            value_entries.append({"id": code, "name": label_str})
+            count = pairs[i + 1]
+            observations[str(len(value_entries) - 1)] = [int(count)]
+
+        facet_structure = {
+            "links": [],
+            "name": facet_name,
+            "dimensions": {
+                "dataSet": [],
+                "series": [],
+                "observation": [
+                    {
+                        "id": "value",
+                        "name": "value",
+                        "keyPosition": 0,
+                        "values": value_entries,
+                    }
+                ],
+            },
+            "measures": {
+                "observation": [
+                    {
+                        "id": "count",
+                        "name": "count",
+                    }
+                ]
+            },
+            "attributes": {
+                "dataSet": [],
+                "series": [],
+                "observation": [],
+            },
+        }
+
+        structure_index = len(structures)
+        structures.append(facet_structure)
+        data_sets.append(
+            {
+                "structure": structure_index,
+                "action": "Information",
+                "observations": observations,
+            }
+        )
+
+    return {
+        "$schema": "https://json.sdmx.org/2.1/sdmx-json-data-schema.json",
+        "meta": {
+            "schema": "https://json.sdmx.org/2.1/sdmx-json-data-schema.json",
+            "id": "summary",
+            "prepared": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "test": False,
+            "contentLanguages": ["en"],
+            "sender": {
+                "id": "CUDL",
+                "name": "CUDL API",
+                "names": {"en": "Lorem ipsum dolor sit amet, consectetur adipiscing elit."},
+            },
+        },
+        "data": {
+            "structures": structures,
+            "dataSets": data_sets,
+        },
+    }
+
+
 @app.get("/collections")
 async def get_collections(q: List[str] = Query(default=None),
                           fq: List[str] = Query(default=None),
@@ -175,14 +369,39 @@ async def get_items(q: List[str] = Query(default=None),
 @app.get("/summary")
 async def get_summary(q: List[str] = Query(default=None),
                 fq: Union[str, None] = None,
-                facet_field: List[str] = Query(default=None, alias="facet.field")):
+                facet_field: List[str] = Query(default=['facet-collection', 'facet-subjects', 'facet-pageHasTranscription', 'facet-pageHasTranslation', 'facet-origin-place', 'facet-languages', 'facet-creations-century', 'facet-hasImage', 'facet-itemLevel'], alias="facet.field"),
+                f_facet_collection_facet_sort: Union[str, None] = Query(default=None, alias="f.facet-collection.facet.sort"),
+                f_facet_subjects_facet_sort: Union[str, None] = Query(default='count', alias="f.facet-subjects.facet.sort"),
+                f_facet_pageHasTranscription_facet_sort: Union[str, None] = Query(default=None, alias="f.facet-pageHasTranscription.facet.sort"),
+                f_facet_pageHasTranslation_facet_sort: Union[str, None] = Query(default=None, alias="f.facet-pageHasTranslation.facet.sort"),
+                f_facet_languages_facet_sort: Union[str, None] = Query(default='count', alias="f.facet-languages.facet.sort"),
+                f_facet_origin_place_facet_sort: Union[str, None] = Query(default='count', alias="f.facet-origin-place.facet.sort"),
+                f_facet_creations_century_facet_sort: Union[str, None] = Query(default=None, alias="f.facet-creations-century.facet.sort"),
+                f_facet_hasImage_facet_sort: Union[str, None] = Query(default=None, alias="f.facet-hasImage.facet.sort"),
+                f_facet_itemLevel_facet_sort: Union[str, None] = Query(default=None, alias="f.facet-itemLevel.facet.sort"),
+                format: Union[str, None] = None,
+                ):
     q_final = ' AND '.join(q) if hasattr(q, '__iter__') else q
 
     # Very few params are relevant to the summary view
-    params = {"q": q_final, "fq": fq, "rows": 0, "facet.field": facet_field}
+    params = {
+        "q": q_final,
+        "fq": fq,
+        "rows": 0,
+        "facet.field": facet_field,
+        "f.facet-collection.facet.sort": f_facet_collection_facet_sort,
+        "f.facet-subjects.facet.sort": f_facet_subjects_facet_sort,
+        "f.facet-pageHasTranscription.facet.sort": f_facet_pageHasTranscription_facet_sort,
+        "f.facet-pageHasTranslation.facet.sort": f_facet_pageHasTranslation_facet_sort,
+        "f.facet-languages.facet.sort": f_facet_languages_facet_sort,
+        "f.facet-origin-place.facet.sort": f_facet_origin_place_facet_sort,
+        "f.facet-creations-century.facet.sort": f_facet_creations_century_facet_sort,
+        "f.facet-hasImage.facet.sort": f_facet_hasImage_facet_sort,
+        "f.facet-itemLevel.facet.sort": f_facet_itemLevel_facet_sort,
+    }
 
     r = await get_request('items', **params)
-    return r
+    return build_sdmx_summary(r) if format == "sdmx" else r
 
 
 # All destructive requests (post, put, delete) will be in a separate API
