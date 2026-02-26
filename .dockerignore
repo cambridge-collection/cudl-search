@@ -1,0 +1,50 @@
+# VCS
+.git
+.gitignore
+
+# Python cache/bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Build/test artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+.coverage
+.coverage.*
+htmlcov/
+
+# Node artifacts (if present)
+node_modules/
+
+# Editor/OS noise
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs/temp
+*.log
+tmp/
+temp/
+*.tmp
+
+# Local secrets/config
+.env
+.env.*
+
+frontend/tests/
