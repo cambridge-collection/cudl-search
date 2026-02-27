@@ -7,7 +7,7 @@ import os
 import requests
 import urllib.parse
 from datetime import datetime, timezone
-from typing import Union, List
+from typing import Union, List, Dict, Tuple
 from fastapi import FastAPI, Request, Query, HTTPException
 
 logger = logging.getLogger('gunicorn.error')
@@ -90,11 +90,34 @@ async def get_request(resource_type: str, **kwargs):
         r = requests.get("%s/solr/%s/spell" % (SOLR_URL, core), params=solr_params, timeout=60)
         r.raise_for_status()
     except requests.exceptions.RequestException as e:
-        if hasattr(e.response, 'text'):
-            results = json.loads(e.response.text)
-            raise HTTPException(status_code=results["responseHeader"]["status"], detail=results["error"]["msg"])
-        else:
+        response = getattr(e, "response", None)
+        if response is None:
             raise HTTPException(status_code=502, detail=str(e).split(':')[-1])
+
+        status_code = response.status_code or 502
+        detail = None
+        response_text = response.text if hasattr(response, "text") else None
+
+        try:
+            results = response.json()
+        except ValueError:
+            results = None
+
+        if isinstance(results, dict):
+            error_data = results.get("error")
+            if isinstance(error_data, dict):
+                detail = error_data.get("msg") or error_data.get("message")
+            if not detail:
+                detail = results.get("message")
+            if not detail and isinstance(results.get("responseHeader"), dict):
+                header_status = results["responseHeader"].get("status")
+                if isinstance(header_status, int) and header_status > 0:
+                    status_code = header_status
+
+        if not detail:
+            detail = response_text or str(e).split(':')[-1]
+
+        raise HTTPException(status_code=status_code, detail=detail)
     result = r.json()
     if 'original_sort' in kwargs and 'sort' in result['responseHeader']['params']:
         result['responseHeader']['params']['sort'] = kwargs["original_sort"]
@@ -136,6 +159,229 @@ def ensure_urlencoded(var, safe=''):
                     value_final = values
                 dict_new.update({key: value_final})
         return dict_new
+
+
+def dedupe_preserve_order(values: List[str]) -> List[str]:
+    unique_values = []
+    seen = set()
+    for value in values:
+        if value in seen:
+            continue
+        unique_values.append(value)
+        seen.add(value)
+    return unique_values
+
+
+def normalize_item_id(item: str) -> str:
+    item_trimmed = str(item).strip()
+    if item_trimmed.startswith("json/"):
+        return item_trimmed if item_trimmed.endswith(".json") else f"{item_trimmed}.json"
+    if item_trimmed.endswith(".json"):
+        return f"json/{item_trimmed}"
+    return f"json/{item_trimmed}.json"
+
+
+def split_and_normalize_items(items: List[str]) -> List[str]:
+    split_items = []
+    for item in items:
+        for value in str(item).split(","):
+            value_trimmed = value.strip()
+            if value_trimmed:
+                split_items.append(normalize_item_id(value_trimmed))
+    return dedupe_preserve_order(split_items)
+
+
+def escape_solr_phrase_value(value: str) -> str:
+    return str(value).replace("\\", "\\\\").replace('"', '\\"')
+
+
+def build_collection_lookup_query(item_ids: List[str]) -> str:
+    clauses = []
+    for item_id in item_ids:
+        safe_item = escape_solr_phrase_value(item_id)
+        clauses.append(f"items._id:\"{safe_item}\"")
+        clauses.append(f"{{!join from=id to=collections._id}}items._id:\"{safe_item}\"")
+    return f"({' OR '.join(clauses)})"
+
+
+def build_collection_lookup_facets(item_ids: List[str]) -> Tuple[Dict[str, dict], Dict[str, Tuple[str, str]]]:
+    facets = {}
+    facet_key_map = {}
+    if len(item_ids) == 1:
+        item_id = item_ids[0]
+        safe_item_id = escape_solr_phrase_value(item_id)
+        facets["direct"] = {
+            "type": "terms",
+            "field": "id",
+            "limit": -1,
+            "domain": {"filter": f"items._id:\"{safe_item_id}\""},
+        }
+        facets["parents"] = {
+            "type": "terms",
+            "field": "id",
+            "limit": -1,
+            "domain": {"filter": f"{{!join from=id to=collections._id}}items._id:\"{safe_item_id}\""},
+        }
+        facet_key_map[item_id] = ("direct", "parents")
+        return facets, facet_key_map
+
+    for index, item_id in enumerate(item_ids):
+        safe_item_id = escape_solr_phrase_value(item_id)
+        direct_key = f"i_{index}_direct"
+        parent_key = f"i_{index}_parents"
+        facets[direct_key] = {
+            "type": "terms",
+            "field": "id",
+            "limit": -1,
+            "domain": {"filter": f"items._id:\"{safe_item_id}\""},
+        }
+        facets[parent_key] = {
+            "type": "terms",
+            "field": "id",
+            "limit": -1,
+            "domain": {"filter": f"{{!join from=id to=collections._id}}items._id:\"{safe_item_id}\""},
+        }
+        facet_key_map[item_id] = (direct_key, parent_key)
+    return facets, facet_key_map
+
+
+def build_collection_ref(collection_id: str) -> str:
+    return f"collections/{collection_id}.collection.json"
+
+
+def get_collection_title_en(collection_doc):
+    if not collection_doc:
+        return None
+    name_full = collection_doc.get("name.full")
+    if isinstance(name_full, list) and name_full:
+        return str(name_full[0])
+    if isinstance(name_full, str):
+        return name_full
+    name_short = collection_doc.get("name.short")
+    if isinstance(name_short, list) and name_short:
+        return str(name_short[0])
+    if isinstance(name_short, str):
+        return name_short
+    return None
+
+
+def extract_facet_bucket_ids(facets, key: str) -> List[str]:
+    facet_data = (facets or {}).get(key) or {}
+    buckets = facet_data.get("buckets") or []
+    values = []
+    for bucket in buckets:
+        if not isinstance(bucket, dict):
+            continue
+        value = bucket.get("val")
+        if value is not None:
+            values.append(str(value))
+    return dedupe_preserve_order(values)
+
+
+def build_collection_lookup_response(solr_response, item_ids: List[str], facet_key_map: Dict[str, Tuple[str, str]]):
+    response = solr_response.get("response") or {}
+    facets = solr_response.get("facets") or {}
+    docs = response.get("docs") or []
+
+    docs_by_id = {}
+    for doc in docs:
+        doc_id = doc.get("id")
+        if doc_id:
+            docs_by_id[doc_id] = doc
+
+    output_items = []
+    for item_id in item_ids:
+        direct_key, parent_key = facet_key_map[item_id]
+        direct_ids = extract_facet_bucket_ids(facets, direct_key)
+        parent_ids = extract_facet_bucket_ids(facets, parent_key)
+
+        positions = []
+        for collection_id in dedupe_preserve_order(direct_ids + parent_ids):
+            collection_doc = docs_by_id.get(collection_id) or {}
+            collection_items = collection_doc.get("items._id") or []
+            try:
+                item_position = collection_items.index(item_id) + 1
+            except ValueError:
+                continue
+            positions.append(
+                {
+                    "collectionId": collection_id,
+                    "itemPosition": item_position,
+                }
+            )
+
+        subcollection_positions = []
+        for parent_id in parent_ids:
+            parent_doc = docs_by_id.get(parent_id) or {}
+            parent_collections = parent_doc.get("collections._id") or []
+            for direct_id in direct_ids:
+                child_ref = build_collection_ref(direct_id)
+                try:
+                    subcollection_position = parent_collections.index(child_ref) + 1
+                except ValueError:
+                    continue
+                subcollection_positions.append(
+                    {
+                        "parentCollectionId": parent_id,
+                        "subcollectionId": direct_id,
+                        "subcollectionPosition": subcollection_position,
+                    }
+                )
+
+        positions_by_collection = {
+            position["collectionId"]: position["itemPosition"] for position in positions
+        }
+        parent_relations_by_child = {}
+        seen_parent_ids_by_child = {}
+        for relation in subcollection_positions:
+            parent_collection_id = relation.get("parentCollectionId")
+            subcollection_id = relation.get("subcollectionId")
+            if not parent_collection_id or not subcollection_id:
+                continue
+            parent_relations_by_child.setdefault(subcollection_id, [])
+            seen_parent_ids_by_child.setdefault(subcollection_id, set())
+            if parent_collection_id in seen_parent_ids_by_child[subcollection_id]:
+                continue
+            seen_parent_ids_by_child[subcollection_id].add(parent_collection_id)
+            parent_relations_by_child[subcollection_id].append(
+                {
+                    "parentCollectionId": parent_collection_id,
+                    "subcollectionPosition": relation.get("subcollectionPosition"),
+                }
+            )
+
+        child_parent_collections = []
+        for direct_id in direct_ids:
+            parent_relations = parent_relations_by_child.get(direct_id) or []
+            parent_list = []
+            for parent_relation in parent_relations:
+                parent_id = parent_relation.get("parentCollectionId")
+                if not parent_id:
+                    continue
+                parent_list.append(
+                    {
+                        "slug": parent_id,
+                        "titleEn": get_collection_title_en(docs_by_id.get(parent_id)),
+                        "position": parent_relation.get("subcollectionPosition"),
+                    }
+                )
+            child_parent_collections.append(
+                {
+                    "slug": direct_id,
+                    "titleEn": get_collection_title_en(docs_by_id.get(direct_id)),
+                    "position": positions_by_collection.get(direct_id),
+                    "parent": parent_list,
+                }
+            )
+
+        output_items.append(
+            {
+                "item": item_id,
+                "collections": child_parent_collections,
+            }
+        )
+
+    return {"items": output_items}
 
 
 def solr_facet_pairs_to_dict(pairs):
@@ -402,6 +648,27 @@ async def get_summary(q: List[str] = Query(default=None),
 
     r = await get_request('items', **params)
     return build_sdmx_summary(r) if format == "sdmx" else r
+
+
+@app.get("/item-collections")
+async def get_collection_lookup(
+    item_id: List[str] = Query(default=None),
+    item: List[str] = Query(default=None),
+):
+    item_ids = split_and_normalize_items((item_id or []) + (item or []))
+    if not item_ids:
+        raise HTTPException(status_code=400, detail="At least one item ID is required")
+
+    facets, facet_key_map = build_collection_lookup_facets(item_ids)
+    params = {
+        "rows": 99,
+        "fl": "id,name.full,name.short,items._id,collections._id",
+        "q": build_collection_lookup_query(item_ids),
+        "omitHeader": "true",
+        "json.facet": json.dumps(facets, separators=(",", ":")),
+    }
+    solr_response = await get_request("collections", **params)
+    return build_collection_lookup_response(solr_response, item_ids, facet_key_map)
 
 
 # All destructive requests (post, put, delete) will be in a separate API
