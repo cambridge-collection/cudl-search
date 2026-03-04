@@ -8,7 +8,7 @@ import requests
 import urllib.parse
 from datetime import datetime, timezone
 from typing import Union, List, Dict, Tuple
-from fastapi import FastAPI, Request, Query, HTTPException
+from fastapi import FastAPI, Request, Query, HTTPException, Response
 
 logger = logging.getLogger('gunicorn.error')
 
@@ -64,21 +64,52 @@ def get_core_name(resource_type: str):
     return core
 
 
+def http_exception_from_request_error(e: requests.exceptions.RequestException) -> HTTPException:
+    response = getattr(e, "response", None)
+    if response is None:
+        return HTTPException(status_code=502, detail=str(e).split(':')[-1])
+
+    status_code = response.status_code or 502
+    detail = None
+    response_text = response.text if hasattr(response, "text") else None
+
+    try:
+        results = response.json()
+    except ValueError:
+        results = None
+
+    if isinstance(results, dict):
+        error_data = results.get("error")
+        if isinstance(error_data, dict):
+            detail = error_data.get("msg") or error_data.get("message")
+        if not detail:
+            detail = results.get("message")
+        if not detail and isinstance(results.get("responseHeader"), dict):
+            header_status = results["responseHeader"].get("status")
+            if isinstance(header_status, int) and header_status > 0:
+                status_code = header_status
+
+    if not detail:
+        detail = response_text or str(e).split(':')[-1]
+
+    return HTTPException(status_code=status_code, detail=detail)
+
+
 async def delete_resource(resource_type: str, file_id: str):
     delete_query = "fileID:%s" % file_id
     delete_cmd = {'delete': {'query': delete_query}}
 
     core = get_core_name(resource_type)
-    if core:
+    if not core:
+        raise HTTPException(status_code=INTERNAL_ERROR_STATUS_CODE, detail="Invalid resource type")
+    try:
         r = requests.post(url="%s/solr/%s/update" % (SOLR_URL, core),
                           headers={"content-type": "application/json; charset=UTF-8"},
                           json=delete_cmd,
                           timeout=60)
-        status_code = r.status_code
-    else:
-        status_code = INTERNAL_ERROR_STATUS_CODE
-
-    return status_code
+        r.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        raise http_exception_from_request_error(e)
 
 
 async def get_request(resource_type: str, **kwargs):
@@ -90,34 +121,7 @@ async def get_request(resource_type: str, **kwargs):
         r = requests.get("%s/solr/%s/spell" % (SOLR_URL, core), params=solr_params, timeout=60)
         r.raise_for_status()
     except requests.exceptions.RequestException as e:
-        response = getattr(e, "response", None)
-        if response is None:
-            raise HTTPException(status_code=502, detail=str(e).split(':')[-1])
-
-        status_code = response.status_code or 502
-        detail = None
-        response_text = response.text if hasattr(response, "text") else None
-
-        try:
-            results = response.json()
-        except ValueError:
-            results = None
-
-        if isinstance(results, dict):
-            error_data = results.get("error")
-            if isinstance(error_data, dict):
-                detail = error_data.get("msg") or error_data.get("message")
-            if not detail:
-                detail = results.get("message")
-            if not detail and isinstance(results.get("responseHeader"), dict):
-                header_status = results["responseHeader"].get("status")
-                if isinstance(header_status, int) and header_status > 0:
-                    status_code = header_status
-
-        if not detail:
-            detail = response_text or str(e).split(':')[-1]
-
-        raise HTTPException(status_code=status_code, detail=detail)
+        raise http_exception_from_request_error(e)
     result = r.json()
     if 'original_sort' in kwargs and 'sort' in result['responseHeader']['params']:
         result['responseHeader']['params']['sort'] = kwargs["original_sort"]
@@ -127,6 +131,8 @@ async def get_request(resource_type: str, **kwargs):
 async def put_item(resource_type: str, data, params):
     core = get_core_name(resource_type)
     path = 'update/json/docs'
+    if not core:
+        raise HTTPException(status_code=INTERNAL_ERROR_STATUS_CODE, detail="Invalid resource type")
     try:
         r = requests.post(url="%s/solr/%s/%s" % (SOLR_URL, core, path),
                           params=params,
@@ -135,10 +141,7 @@ async def put_item(resource_type: str, data, params):
                           timeout=60)
         r.raise_for_status()
     except requests.exceptions.RequestException as e:
-        raise e
-    status_code = r.status_code
-
-    return status_code
+        raise http_exception_from_request_error(e)
 
 
 # Does FastAPI escape params automatically?
@@ -680,17 +683,21 @@ async def update_collection(request: Request):
     # Receive data via a data-binary curl request from the CUDL Indexer lambda
     data = await request.body()
 
-    # status_code = ''
-    json_dict = json.loads(data)
-    if json_dict['name']:
-        url_slug = json_dict['name']["url-slug"]
-        logger.info(f"Indexing %s" % url_slug)
-        status_code = await put_item('collection', data, {'f': ['$FQN:/**', 'id:/name/url-slug']})
-    else:
-        logger.info(f"ERROR: Collection JSON does not seem to conform to expectations")
-        # I wasn't sure what status_code to use for invalid document.
-        status_code = INTERNAL_ERROR_STATUS_CODE
-    return status_code
+    try:
+        json_dict = json.loads(data)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+    if not isinstance(json_dict, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
+    name_data = json_dict.get("name")
+    if not isinstance(name_data, dict) or not name_data.get("url-slug"):
+        logger.info("ERROR: Collection JSON does not seem to conform to expectations")
+        raise HTTPException(status_code=400, detail="Collection JSON does not seem to conform to expectations")
+
+    logger.info("Indexing %s", name_data["url-slug"])
+    await put_item('collection', data, {'f': ['$FQN:/**', 'id:/name/url-slug']})
+    return Response(status_code=204)
 
 
 @app.put("/item")
@@ -698,22 +705,30 @@ async def update_item(request: Request):
     # Receive data via a data-binary curl request from the CUDL Indexer lambda
     data = await request.body()
 
-    json_dict = json.loads(data)
-    if json_dict['pages']:
-        logger.info(f"Indexing %s" % json_dict['fileID'])
-        status_code = await put_item('item', data, {'split': '/pages', 'f': ['/pages/*', '/*']})
-    else:
-        logger.info(f"ERROR: JSON does not seem to conform to expectations: %s" % json_dict['fileID'])
-        # I wasn't sure what status_code to use for invalid document.
-        status_code = INTERNAL_ERROR_STATUS_CODE
-    return status_code
+    try:
+        json_dict = json.loads(data)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+    if not isinstance(json_dict, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
+    file_id = json_dict.get("fileID", "unknown")
+    if not json_dict.get("pages"):
+        logger.info("ERROR: JSON does not seem to conform to expectations: %s", file_id)
+        raise HTTPException(status_code=400, detail=f"JSON does not seem to conform to expectations: {file_id}")
+
+    logger.info("Indexing %s", file_id)
+    await put_item('item', data, {'split': '/pages', 'f': ['/pages/*', '/*']})
+    return Response(status_code=204)
 
 
 @app.delete("/item/{file_id}")
 async def delete_item(file_id: str):
-    return await delete_resource('item', file_id)
+    await delete_resource('item', file_id)
+    return Response(status_code=204)
 
 
 @app.delete("/collection/{file_id}")
 async def delete_collection(file_id: str):
-    return await delete_resource('collection', file_id)
+    await delete_resource('collection', file_id)
+    return Response(status_code=204)
