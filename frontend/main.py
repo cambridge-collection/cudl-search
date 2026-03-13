@@ -12,15 +12,13 @@ from fastapi import FastAPI, Request, Query, HTTPException, Response
 
 logger = logging.getLogger('gunicorn.error')
 
-if 'SOLR_HOST' in os.environ:
-    SOLR_HOST = os.environ['SOLR_HOST']
-else:
-    print('ERROR: SOLR_HOST environment variable not set')
+SOLR_HOST = os.environ.get('SOLR_HOST')
+if not SOLR_HOST:
+    raise RuntimeError('SOLR_HOST environment variable not set')
 
-if 'SOLR_PORT' in os.environ:
-    SOLR_PORT = os.environ['SOLR_PORT']
-else:
-    print('WARN: SOLR_PORT environment variable not set')
+SOLR_PORT = os.environ.get('SOLR_PORT')
+if not SOLR_PORT:
+    raise RuntimeError('SOLR_PORT environment variable not set')
 
 SOLR_URL = 'http://%s:%s' % (SOLR_HOST, SOLR_PORT)
 
