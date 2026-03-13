@@ -830,7 +830,7 @@ async def update_item_collections(request: Request):
 
     collection_id = get_collection_slug(json_dict)
     if not collection_id:
-        logger.info("ERROR: Collection JSON does not seem to conform to expectations")
+        logger.error("Collection JSON does not seem to conform to expectations")
         raise HTTPException(status_code=400, detail="Collection JSON does not seem to conform to expectations")
 
     logger.info("Indexing item-collection relations for %s", collection_id)
@@ -862,7 +862,7 @@ async def update_collection(request: Request):
 
     name_data = json_dict.get("name")
     if not isinstance(name_data, dict) or not name_data.get("url-slug"):
-        logger.info("ERROR: Collection JSON does not seem to conform to expectations")
+        logger.error("Collection JSON does not seem to conform to expectations")
         raise HTTPException(status_code=400, detail="Collection JSON does not seem to conform to expectations")
 
     logger.info("Indexing %s", name_data["url-slug"])
@@ -885,7 +885,7 @@ async def update_item(request: Request):
 
     file_id = json_dict.get("fileID", "unknown")
     if not json_dict.get("pages"):
-        logger.info("ERROR: JSON does not seem to conform to expectations: %s", file_id)
+        logger.error("JSON does not seem to conform to expectations: %s", file_id)
         raise HTTPException(status_code=400, detail=f"JSON does not seem to conform to expectations: {file_id}")
 
     logger.info("Indexing %s", file_id)
