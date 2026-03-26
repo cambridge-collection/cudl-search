@@ -1,29 +1,4 @@
-# Python bytecode/cache
-__pycache__/
-*.py[cod]
-
-# Python tooling/cache
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.coverage
-.coverage.*
-htmlcov/
-
-# Virtual environments
-.venv/
-venv/
-
-# Build artifacts
-build/
-dist/
-*.egg-info/
-
-# IDE/editor
-.idea/
-.vscode/
-
-# OS-specific junk files
+# OS artifacts
 # macOS
 .DS_Store
 .AppleDouble
@@ -44,3 +19,41 @@ $RECYCLE.BIN/
 .fuse_hidden*
 .nfs*
 .Trash-*/
+
+# IDE/editor artifacts
+.idea/
+.vscode/
+*.code-workspace
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Python tooling/test caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.nox/
+.tox/
+.hypothesis/
+
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
+
+# Build/package outputs
+build/
+dist/
+*.egg-info/
+pip-wheel-metadata/
+
+# Notebooks
+.ipynb_checkpoints/
