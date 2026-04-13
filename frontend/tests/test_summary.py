@@ -10,9 +10,13 @@ from frontend import main
 class SummarySdmxTests(unittest.TestCase):
     def get_dataset_by_structure_name(self, message, name):
         structures = message["data"]["structures"]
-        target_index = next(index for index, item in enumerate(structures) if item["name"] == name)
+        target_index = next(
+            index for index, item in enumerate(structures) if item["name"] == name
+        )
         return next(
-            dataset for dataset in message["data"]["dataSets"] if dataset["structure"] == target_index
+            dataset
+            for dataset in message["data"]["dataSets"]
+            if dataset["structure"] == target_index
         )
 
     def test_true_count_extraction(self):
@@ -36,7 +40,9 @@ class SummarySdmxTests(unittest.TestCase):
             },
         }
         message = main.build_sdmx_summary(solr_response)
-        service_obs = self.get_dataset_by_structure_name(message, "service_stats")["observations"]
+        service_obs = self.get_dataset_by_structure_name(message, "service_stats")[
+            "observations"
+        ]
 
         self.assertEqual(service_obs["0"][0], 123)
         self.assertEqual(service_obs["1"][0], 2)
@@ -55,7 +61,9 @@ class SummarySdmxTests(unittest.TestCase):
         }
         message = main.build_sdmx_summary(solr_response)
         dataset = self.get_dataset_by_structure_name(message, "facet-collection")
-        values = message["data"]["structures"][dataset["structure"]]["dimensions"]["observation"][0]["values"]
+        values = message["data"]["structures"][dataset["structure"]]["dimensions"][
+            "observation"
+        ][0]["values"]
 
         self.assertEqual(values[0]["name"], "Collection A")
         self.assertEqual(dataset["observations"]["0"][0], 4)
@@ -74,7 +82,9 @@ class SummarySdmxTests(unittest.TestCase):
             },
         }
         message = main.build_sdmx_summary(solr_response)
-        structure_names = [structure["name"] for structure in message["data"]["structures"]]
+        structure_names = [
+            structure["name"] for structure in message["data"]["structures"]
+        ]
         self.assertNotIn("facet-itemLevel", structure_names)
         self.assertNotIn("facet-hasPage", structure_names)
         self.assertIn("facet-pageHasTranscription", structure_names)
