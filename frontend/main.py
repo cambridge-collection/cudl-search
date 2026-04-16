@@ -45,6 +45,7 @@ FACET_LABELS = {
     "facet-languages": "Languages",
     "facet-creations-century": "Creation century",
     "facet-hasImage": "Has image",
+    "facet-itemStatus": "Item status",
 }
 
 METRIC_LABELS = {
