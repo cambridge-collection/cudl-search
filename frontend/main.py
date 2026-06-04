@@ -105,7 +105,7 @@ def http_exception_from_request_error(
 
 
 async def delete_resource(resource_type: str, file_id: str):
-    delete_query = "fileID:%s" % file_id
+    delete_query = "fileID_str:%s" % file_id
     await delete_by_query(resource_type, delete_query)
 
 
