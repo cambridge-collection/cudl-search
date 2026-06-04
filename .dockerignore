@@ -21,6 +21,9 @@ venv/
 env/
 ENV/
 
+# Markdown
+*.md
+
 # Build/test artifacts
 build/
 dist/

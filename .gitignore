@@ -24,6 +24,8 @@ $RECYCLE.BIN/
 .idea/
 .vscode/
 *.code-workspace
+*.swp
+*.swo
 
 # Python artifacts
 __pycache__/
