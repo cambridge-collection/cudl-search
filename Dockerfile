@@ -8,4 +8,4 @@ RUN pip install --no-cache-dir --upgrade -r /code/requirements.txt
 
 COPY frontend /code/frontend
 
-CMD gunicorn -b 0.0.0.0:${API_PORT} -w ${NUM_WORKERS} -k uvicorn.workers.UvicornWorker frontend.main:app --access-logfile - --error-logfile -
+CMD gunicorn -b 0.0.0.0:${API_PORT} -w ${NUM_WORKERS} -k uvicorn_worker.UvicornWorker frontend.main:app --access-logfile - --error-logfile -
