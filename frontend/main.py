@@ -104,14 +104,23 @@ def http_exception_from_request_error(
     return HTTPException(status_code=status_code, detail=detail)
 
 
-def build_item_delete_query(file_id, is_released=None):
-    query = "fileID_str:%s" % file_id
+def add_release_status_scope(query, field, is_released=None):
     if is_released is not None:
         # Negate the opposite value (lowercase Solr literal, not str(bool)) so
         # legacy field-missing docs are swept while the just-PUT doc survives.
         opposite = "false" if is_released else "true"
-        query += " AND -isReleased:%s" % opposite
+        query += " AND -%s:%s" % (field, opposite)
     return query
+
+
+def build_item_delete_query(file_id, is_released=None):
+    return add_release_status_scope(
+        "fileID_str:%s" % file_id, "isReleased", is_released
+    )
+
+
+def build_collection_delete_query(file_id, is_released=None):
+    return add_release_status_scope("fileID_str:%s" % file_id, "released", is_released)
 
 
 async def delete_resource(resource_type: str, file_id: str, is_released=None):
@@ -395,6 +404,7 @@ def build_collection_relation_docs(
     if not collection_id:
         raise ValueError("Collection JSON does not seem to conform to expectations")
     collection_title_en = get_collection_title_en_from_source(collection_doc)
+    is_released = collection_doc.get("released")
 
     relation_docs = []
     item_ids = extract_collection_item_ids(collection_doc)
@@ -408,6 +418,8 @@ def build_collection_relation_docs(
         }
         if collection_title_en:
             relation_doc["collection_title_en_s"] = collection_title_en
+        if is_released is not None:
+            relation_doc["released_b"] = is_released
         relation_docs.append(relation_doc)
 
     child_ids = extract_collection_child_ids(collection_doc)
@@ -423,6 +435,8 @@ def build_collection_relation_docs(
         }
         if collection_title_en:
             relation_doc["collection_title_en_s"] = collection_title_en
+        if is_released is not None:
+            relation_doc["released_b"] = is_released
         relation_docs.append(relation_doc)
     return collection_id, relation_docs
 
@@ -583,21 +597,25 @@ async def rebuild_collection_relation_index(
 ):
     collection_id, relation_docs = build_collection_relation_docs(collection_doc)
     safe_collection_id = escape_solr_phrase_value(collection_id)
-    await delete_by_query(
-        "collection-relation", f'collection_id_s:"{safe_collection_id}"'
+    delete_query = add_release_status_scope(
+        f'collection_id_s:"{safe_collection_id}"',
+        "released_b",
+        collection_doc.get("released"),
     )
+    await delete_by_query("collection-relation", delete_query)
     if relation_docs:
         await put_docs("collection-relation", relation_docs)
 
 
-async def delete_collection_relation_index(collection_id: str):
+async def delete_collection_relation_index(collection_id: str, is_released=None):
     collection_id_normalized = normalize_collection_id(collection_id)
     if not collection_id_normalized:
         return
     safe_collection_id = escape_solr_phrase_value(collection_id_normalized)
-    await delete_by_query(
-        "collection-relation", f'collection_id_s:"{safe_collection_id}"'
+    delete_query = add_release_status_scope(
+        f'collection_id_s:"{safe_collection_id}"', "released_b", is_released
     )
+    await delete_by_query("collection-relation", delete_query)
 
 
 async def fetch_item_and_parent_relations(
@@ -1070,7 +1088,9 @@ async def delete_item(file_id: str, isReleased: Optional[bool] = None):
 
 
 @app.delete("/collection/{file_id}")
-async def delete_collection(file_id: str):
-    await delete_resource("collection", file_id)
-    await delete_collection_relation_index(file_id)
+async def delete_collection(file_id: str, released: Optional[bool] = None):
+    await delete_by_query(
+        "collection", build_collection_delete_query(file_id, released)
+    )
+    await delete_collection_relation_index(file_id, released)
     return Response(status_code=204)
