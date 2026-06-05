@@ -7,7 +7,7 @@ import os
 import requests
 import urllib.parse
 from datetime import datetime, timezone
-from typing import Union, List, Dict, Tuple
+from typing import Union, List, Dict, Tuple, Optional
 from fastapi import FastAPI, Request, Query, HTTPException, Response
 
 logger = logging.getLogger("gunicorn.error")
@@ -104,8 +104,18 @@ def http_exception_from_request_error(
     return HTTPException(status_code=status_code, detail=detail)
 
 
-async def delete_resource(resource_type: str, file_id: str):
-    delete_query = "fileID_str:%s" % file_id
+def build_item_delete_query(file_id, is_released=None):
+    query = "fileID_str:%s" % file_id
+    if is_released is not None:
+        # Negate the opposite value (lowercase Solr literal, not str(bool)) so
+        # legacy field-missing docs are swept while the just-PUT doc survives.
+        opposite = "false" if is_released else "true"
+        query += " AND -isReleased:%s" % opposite
+    return query
+
+
+async def delete_resource(resource_type: str, file_id: str, is_released=None):
+    delete_query = build_item_delete_query(file_id, is_released)
     await delete_by_query(resource_type, delete_query)
 
 
@@ -1054,8 +1064,8 @@ async def update_item(request: Request):
 
 
 @app.delete("/item/{file_id}")
-async def delete_item(file_id: str):
-    await delete_resource("item", file_id)
+async def delete_item(file_id: str, isReleased: Optional[bool] = None):
+    await delete_resource("item", file_id, isReleased)
     return Response(status_code=204)
 
 
