@@ -113,18 +113,14 @@ def add_release_status_scope(query, field, is_released=None):
     return query
 
 
-def build_item_delete_query(file_id, is_released=None):
+def build_file_delete_query(file_id, is_released=None):
     return add_release_status_scope(
         "fileID_str:%s" % file_id, "isReleased", is_released
     )
 
 
-def build_collection_delete_query(file_id, is_released=None):
-    return add_release_status_scope("fileID_str:%s" % file_id, "released", is_released)
-
-
 async def delete_resource(resource_type: str, file_id: str, is_released=None):
-    delete_query = build_item_delete_query(file_id, is_released)
+    delete_query = build_file_delete_query(file_id, is_released)
     await delete_by_query(resource_type, delete_query)
 
 
@@ -1088,9 +1084,9 @@ async def delete_item(file_id: str, isReleased: Optional[bool] = None):
 
 
 @app.delete("/collection/{file_id}")
-async def delete_collection(file_id: str, released: Optional[bool] = None):
+async def delete_collection(file_id: str, isReleased: Optional[bool] = None):
     await delete_by_query(
-        "collection", build_collection_delete_query(file_id, released)
+        "collection", build_file_delete_query(file_id, isReleased)
     )
-    await delete_collection_relation_index(file_id, released)
+    await delete_collection_relation_index(file_id, isReleased)
     return Response(status_code=204)
