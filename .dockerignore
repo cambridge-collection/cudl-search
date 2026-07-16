@@ -58,4 +58,7 @@ temp/
 # Project-local tests not needed in runtime image
 frontend/tests/
 
-docker-compose.yml
+# Host-side local development helpers
+scripts/
+
+docker-compose*.yml
