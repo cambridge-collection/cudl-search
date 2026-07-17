@@ -1,9 +1,9 @@
 services:
-  cudl-search-api:
+  cudl-search:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: cudl-search-api
+    container_name: cudl-search
     environment:
       SOLR_HOST: ${SOLR_HOST:-host.docker.internal}
       SOLR_PORT: ${SOLR_PORT:-8983}
