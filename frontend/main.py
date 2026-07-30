@@ -400,7 +400,7 @@ def build_collection_relation_docs(
     if not collection_id:
         raise ValueError("Collection JSON does not seem to conform to expectations")
     collection_title_en = get_collection_title_en_from_source(collection_doc)
-    is_released = collection_doc.get("released")
+    is_released = collection_doc.get("isReleased", False)
 
     relation_docs = []
     item_ids = extract_collection_item_ids(collection_doc)
@@ -596,7 +596,7 @@ async def rebuild_collection_relation_index(
     delete_query = add_release_status_scope(
         f'collection_id_s:"{safe_collection_id}"',
         "released_b",
-        collection_doc.get("released"),
+        collection_doc.get("isReleased", False),
     )
     await delete_by_query("collection-relation", delete_query)
     if relation_docs:
