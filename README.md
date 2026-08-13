@@ -4,6 +4,9 @@
 
 1. Docker installed
 2. `SOLR_HOST`, `SOLR_PORT` and `API_PORT` environment variables set in shell or in `.env` file.
+3. `ENABLE_ORPHAN_PAGE_PRUNE` optionally set in shell or in `.env` file. It defaults to
+   `false`; set it to `true` to have `PUT /item` remove page documents no longer present in
+   the payload.
 
 ## Running locally
 

@@ -28,6 +28,7 @@ services:
       SOLR_HOST: solr
       SOLR_PORT: 8983
       API_PORT: 80
+      ENABLE_ORPHAN_PAGE_PRUNE: ${ENABLE_ORPHAN_PAGE_PRUNE:-false}
       NUM_WORKERS: 5
     ports:
       - "${SEARCH_PORT:-80}:80"
