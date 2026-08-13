@@ -22,12 +22,18 @@ if not SOLR_PORT:
 
 SOLR_URL = "http://%s:%s" % (SOLR_HOST, SOLR_PORT)
 
+ENABLE_ORPHAN_PAGE_PRUNE = os.environ.get(
+    "ENABLE_ORPHAN_PAGE_PRUNE", "false"
+).strip().lower() in {"1", "true", "yes", "on"}
+
 INTERNAL_ERROR_STATUS_CODE = 500
 
 # Core names
 ITEM_CORE = "cdcp"
 COLLECTION_JSON_CORE = "collection"
 COLLECTION_RELATION_CORE = "collection_relation"
+
+ITEM_SCOPE_FIELD = "fileID_str"
 
 ITEM_EDGE_TYPE = "item"
 SUBCOLLECTION_EDGE_TYPE = "subcollection"
@@ -562,6 +568,63 @@ def build_collection_lookup_response(
     return {"items": [{"item": item_id, "collections": child_parent_collections}]}
 
 
+def describe_item_payload(json_dict) -> Optional[str]:
+    try:
+        display_form = json_dict["descriptiveMetadata"][0]["shelfLocator"][
+            "displayForm"
+        ]
+    except (IndexError, KeyError, TypeError):
+        return None
+    if not isinstance(display_form, str):
+        return None
+    return display_form.strip() or None
+
+
+def build_item_error_detail(message: str, json_dict) -> str:
+    file_id = json_dict.get("fileID")
+    if isinstance(file_id, str) and file_id.strip():
+        identifier = file_id
+    else:
+        identifier = describe_item_payload(json_dict)
+    return "%s: %s" % (message, identifier) if identifier else message
+
+
+def build_orphan_prune_query(file_id: str, max_version: int) -> str:
+    return '%s:"%s" AND _version_:[* TO %d]' % (
+        ITEM_SCOPE_FIELD,
+        escape_solr_phrase_value(file_id),
+        max_version,
+    )
+
+
+async def get_max_version(resource_type: str, file_id: str) -> Optional[int]:
+    core = get_core_name(resource_type)
+    if not core:
+        logger.warning(
+            "No core for resource type %s; skipping version pre-read", resource_type
+        )
+        return None
+    params = {
+        "q": '%s:"%s"' % (ITEM_SCOPE_FIELD, escape_solr_phrase_value(file_id)),
+        "sort": "_version_ desc",
+        "rows": 1,
+        "fl": "_version_",
+    }
+    try:
+        r = requests.get(
+            "%s/solr/%s/select" % (SOLR_URL, core), params=params, timeout=60
+        )
+        r.raise_for_status()
+        docs = extract_response_docs(r.json())
+    except requests.exceptions.RequestException as e:
+        logger.warning("Version pre-read failed for %s: %s", file_id, e)
+        return None
+    if not docs:
+        logger.info("No existing documents for %s; nothing to prune", file_id)
+        return None
+    return docs[0]["_version_"]
+
+
 def extract_response_docs(solr_response) -> List[dict]:
     response = solr_response.get("response") or {}
     docs = response.get("docs") or []
@@ -1064,16 +1127,31 @@ async def update_item(request: Request):
     if not isinstance(json_dict, dict):
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
-    file_id = json_dict.get("fileID", "unknown")
-    if not json_dict.get("pages"):
-        logger.error("JSON does not seem to conform to expectations: %s", file_id)
-        raise HTTPException(
-            status_code=400,
-            detail=f"JSON does not seem to conform to expectations: {file_id}",
-        )
+    file_id = json_dict.get("fileID")
+    if not isinstance(file_id, str) or not file_id.strip():
+        detail = build_item_error_detail("JSON has no fileID", json_dict)
+        logger.error(detail)
+        raise HTTPException(status_code=400, detail=detail)
+
+    pages = json_dict.get("pages")
+    if not isinstance(pages, list) or not pages:
+        detail = build_item_error_detail("JSON has no pages", json_dict)
+        logger.error(detail)
+        raise HTTPException(status_code=400, detail=detail)
 
     logger.info("Indexing %s", file_id)
+    max_version = (
+        await get_max_version("item", file_id) if ENABLE_ORPHAN_PAGE_PRUNE else None
+    )
     await put_item("item", data, {"split": "/pages", "f": ["/pages/*", "/*"]})
+    if max_version is not None:
+        logger.info(
+            "Pruning orphaned pages for %s (%d pages) at or below version %d",
+            file_id,
+            len(pages),
+            max_version,
+        )
+        await delete_by_query("item", build_orphan_prune_query(file_id, max_version))
     return Response(status_code=204)
 
 
