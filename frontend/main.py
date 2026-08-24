@@ -6,6 +6,7 @@ import re
 import os
 import requests
 import urllib.parse
+import uuid
 from datetime import datetime, timezone
 from typing import Union, List, Dict, Tuple, Optional
 from fastapi import FastAPI, Request, Query, HTTPException, Response
@@ -34,6 +35,7 @@ COLLECTION_JSON_CORE = "collection"
 COLLECTION_RELATION_CORE = "collection_relation"
 
 ITEM_SCOPE_FIELD = "fileID_str"
+ITEM_MARKER_FIELD = "indexRunId_s"
 
 ITEM_EDGE_TYPE = "item"
 SUBCOLLECTION_EDGE_TYPE = "subcollection"
@@ -589,40 +591,21 @@ def build_item_error_detail(message: str, json_dict) -> str:
     return "%s: %s" % (message, identifier) if identifier else message
 
 
-def build_orphan_prune_query(file_id: str, max_version: int) -> str:
-    return '%s:"%s" AND _version_:[* TO %d]' % (
+def build_orphan_prune_query(file_id: str, marker: str) -> str:
+    return '%s:"%s" AND -%s:"%s"' % (
         ITEM_SCOPE_FIELD,
         escape_solr_phrase_value(file_id),
-        max_version,
+        ITEM_MARKER_FIELD,
+        escape_solr_phrase_value(marker),
     )
 
 
-async def get_max_version(resource_type: str, file_id: str) -> Optional[int]:
-    core = get_core_name(resource_type)
-    if not core:
-        logger.warning(
-            "No core for resource type %s; skipping version pre-read", resource_type
-        )
-        return None
-    params = {
-        "q": '%s:"%s"' % (ITEM_SCOPE_FIELD, escape_solr_phrase_value(file_id)),
-        "sort": "_version_ desc",
-        "rows": 1,
-        "fl": "_version_",
-    }
-    try:
-        r = requests.get(
-            "%s/solr/%s/select" % (SOLR_URL, core), params=params, timeout=60
-        )
-        r.raise_for_status()
-        docs = extract_response_docs(r.json())
-    except requests.exceptions.RequestException as e:
-        logger.warning("Version pre-read failed for %s: %s", file_id, e)
-        return None
-    if not docs:
-        logger.info("No existing documents for %s; nothing to prune", file_id)
-        return None
-    return docs[0]["_version_"]
+def inject_run_marker(body: bytes, marker: str) -> Optional[bytes]:
+    field = b'"%s":"%s",' % (ITEM_MARKER_FIELD.encode(), marker.encode())
+    marked, count = re.subn(
+        rb'"fileID"\s*:', lambda m: field + m.group(0), body, count=1
+    )
+    return marked if count else None
 
 
 def extract_response_docs(solr_response) -> List[dict]:
@@ -1140,18 +1123,23 @@ async def update_item(request: Request):
         raise HTTPException(status_code=400, detail=detail)
 
     logger.info("Indexing %s", file_id)
-    max_version = (
-        await get_max_version("item", file_id) if ENABLE_ORPHAN_PAGE_PRUNE else None
-    )
+    marker = str(uuid.uuid4()) if ENABLE_ORPHAN_PAGE_PRUNE else None
+    if marker:
+        marked = inject_run_marker(data, marker)
+        if marked is None:
+            # Without the marker every document would look orphaned, so do not prune.
+            logger.error("Could not mark %s; indexing without a prune", file_id)
+            marker = None
+        else:
+            data = marked
     await put_item("item", data, {"split": "/pages", "f": ["/pages/*", "/*"]})
-    if max_version is not None:
+    if marker:
         logger.info(
-            "Pruning orphaned pages for %s (%d pages) at or below version %d",
+            "Running orphan page prune for %s, keeping documents marked %s",
             file_id,
-            len(pages),
-            max_version,
+            marker,
         )
-        await delete_by_query("item", build_orphan_prune_query(file_id, max_version))
+        await delete_by_query("item", build_orphan_prune_query(file_id, marker))
     return Response(status_code=204)
 
 
@@ -1163,8 +1151,6 @@ async def delete_item(file_id: str, isReleased: Optional[bool] = None):
 
 @app.delete("/collection/{file_id}")
 async def delete_collection(file_id: str, isReleased: Optional[bool] = None):
-    await delete_by_query(
-        "collection", build_file_delete_query(file_id, isReleased)
-    )
+    await delete_by_query("collection", build_file_delete_query(file_id, isReleased))
     await delete_collection_relation_index(file_id, isReleased)
     return Response(status_code=204)
