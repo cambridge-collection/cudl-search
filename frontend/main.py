@@ -6,8 +6,9 @@ import re
 import os
 import requests
 import urllib.parse
+import uuid
 from datetime import datetime, timezone
-from typing import Union, List, Dict, Tuple
+from typing import Union, List, Dict, Tuple, Optional
 from fastapi import FastAPI, Request, Query, HTTPException, Response
 
 logger = logging.getLogger("gunicorn.error")
@@ -22,12 +23,19 @@ if not SOLR_PORT:
 
 SOLR_URL = "http://%s:%s" % (SOLR_HOST, SOLR_PORT)
 
+ENABLE_ORPHAN_PAGE_PRUNE = os.environ.get(
+    "ENABLE_ORPHAN_PAGE_PRUNE", "false"
+).strip().lower() in {"1", "true", "yes", "on"}
+
 INTERNAL_ERROR_STATUS_CODE = 500
 
 # Core names
 ITEM_CORE = "cdcp"
 COLLECTION_JSON_CORE = "collection"
 COLLECTION_RELATION_CORE = "collection_relation"
+
+ITEM_SCOPE_FIELD = "fileID_str"
+ITEM_MARKER_FIELD = "indexRunId_s"
 
 ITEM_EDGE_TYPE = "item"
 SUBCOLLECTION_EDGE_TYPE = "subcollection"
@@ -104,8 +112,23 @@ def http_exception_from_request_error(
     return HTTPException(status_code=status_code, detail=detail)
 
 
-async def delete_resource(resource_type: str, file_id: str):
-    delete_query = "fileID_str:%s" % file_id
+def add_release_status_scope(query, field, is_released=None):
+    if is_released is not None:
+        # Negate the opposite value (lowercase Solr literal, not str(bool)) so
+        # legacy field-missing docs are swept while the just-PUT doc survives.
+        opposite = "false" if is_released else "true"
+        query += " AND -%s:%s" % (field, opposite)
+    return query
+
+
+def build_file_delete_query(file_id, is_released=None):
+    return add_release_status_scope(
+        "fileID_str:%s" % file_id, "isReleased", is_released
+    )
+
+
+async def delete_resource(resource_type: str, file_id: str, is_released=None):
+    delete_query = build_file_delete_query(file_id, is_released)
     await delete_by_query(resource_type, delete_query)
 
 
@@ -385,6 +408,7 @@ def build_collection_relation_docs(
     if not collection_id:
         raise ValueError("Collection JSON does not seem to conform to expectations")
     collection_title_en = get_collection_title_en_from_source(collection_doc)
+    is_released = collection_doc.get("isReleased", False)
 
     relation_docs = []
     item_ids = extract_collection_item_ids(collection_doc)
@@ -398,6 +422,8 @@ def build_collection_relation_docs(
         }
         if collection_title_en:
             relation_doc["collection_title_en_s"] = collection_title_en
+        if is_released is not None:
+            relation_doc["released_b"] = is_released
         relation_docs.append(relation_doc)
 
     child_ids = extract_collection_child_ids(collection_doc)
@@ -413,6 +439,8 @@ def build_collection_relation_docs(
         }
         if collection_title_en:
             relation_doc["collection_title_en_s"] = collection_title_en
+        if is_released is not None:
+            relation_doc["released_b"] = is_released
         relation_docs.append(relation_doc)
     return collection_id, relation_docs
 
@@ -542,6 +570,44 @@ def build_collection_lookup_response(
     return {"items": [{"item": item_id, "collections": child_parent_collections}]}
 
 
+def describe_item_payload(json_dict) -> Optional[str]:
+    try:
+        display_form = json_dict["descriptiveMetadata"][0]["shelfLocator"][
+            "displayForm"
+        ]
+    except (IndexError, KeyError, TypeError):
+        return None
+    if not isinstance(display_form, str):
+        return None
+    return display_form.strip() or None
+
+
+def build_item_error_detail(message: str, json_dict) -> str:
+    file_id = json_dict.get("fileID")
+    if isinstance(file_id, str) and file_id.strip():
+        identifier = file_id
+    else:
+        identifier = describe_item_payload(json_dict)
+    return "%s: %s" % (message, identifier) if identifier else message
+
+
+def build_orphan_prune_query(file_id: str, marker: str) -> str:
+    return '%s:"%s" AND -%s:"%s"' % (
+        ITEM_SCOPE_FIELD,
+        escape_solr_phrase_value(file_id),
+        ITEM_MARKER_FIELD,
+        escape_solr_phrase_value(marker),
+    )
+
+
+def inject_run_marker(body: bytes, marker: str) -> Optional[bytes]:
+    field = b'"%s":"%s",' % (ITEM_MARKER_FIELD.encode(), marker.encode())
+    marked, count = re.subn(
+        rb'"fileID"\s*:', lambda m: field + m.group(0), body, count=1
+    )
+    return marked if count else None
+
+
 def extract_response_docs(solr_response) -> List[dict]:
     response = solr_response.get("response") or {}
     docs = response.get("docs") or []
@@ -573,21 +639,25 @@ async def rebuild_collection_relation_index(
 ):
     collection_id, relation_docs = build_collection_relation_docs(collection_doc)
     safe_collection_id = escape_solr_phrase_value(collection_id)
-    await delete_by_query(
-        "collection-relation", f'collection_id_s:"{safe_collection_id}"'
+    delete_query = add_release_status_scope(
+        f'collection_id_s:"{safe_collection_id}"',
+        "released_b",
+        collection_doc.get("isReleased", False),
     )
+    await delete_by_query("collection-relation", delete_query)
     if relation_docs:
         await put_docs("collection-relation", relation_docs)
 
 
-async def delete_collection_relation_index(collection_id: str):
+async def delete_collection_relation_index(collection_id: str, is_released=None):
     collection_id_normalized = normalize_collection_id(collection_id)
     if not collection_id_normalized:
         return
     safe_collection_id = escape_solr_phrase_value(collection_id_normalized)
-    await delete_by_query(
-        "collection-relation", f'collection_id_s:"{safe_collection_id}"'
+    delete_query = add_release_status_scope(
+        f'collection_id_s:"{safe_collection_id}"', "released_b", is_released
     )
+    await delete_by_query("collection-relation", delete_query)
 
 
 async def fetch_item_and_parent_relations(
@@ -1040,27 +1110,47 @@ async def update_item(request: Request):
     if not isinstance(json_dict, dict):
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
-    file_id = json_dict.get("fileID", "unknown")
-    if not json_dict.get("pages"):
-        logger.error("JSON does not seem to conform to expectations: %s", file_id)
-        raise HTTPException(
-            status_code=400,
-            detail=f"JSON does not seem to conform to expectations: {file_id}",
-        )
+    file_id = json_dict.get("fileID")
+    if not isinstance(file_id, str) or not file_id.strip():
+        detail = build_item_error_detail("JSON has no fileID", json_dict)
+        logger.error(detail)
+        raise HTTPException(status_code=400, detail=detail)
+
+    pages = json_dict.get("pages")
+    if not isinstance(pages, list) or not pages:
+        detail = build_item_error_detail("JSON has no pages", json_dict)
+        logger.error(detail)
+        raise HTTPException(status_code=400, detail=detail)
 
     logger.info("Indexing %s", file_id)
+    marker = str(uuid.uuid4()) if ENABLE_ORPHAN_PAGE_PRUNE else None
+    if marker:
+        marked = inject_run_marker(data, marker)
+        if marked is None:
+            # Without the marker every document would look orphaned, so do not prune.
+            logger.error("Could not mark %s; indexing without a prune", file_id)
+            marker = None
+        else:
+            data = marked
     await put_item("item", data, {"split": "/pages", "f": ["/pages/*", "/*"]})
+    if marker:
+        logger.info(
+            "Running orphan page prune for %s, keeping documents marked %s",
+            file_id,
+            marker,
+        )
+        await delete_by_query("item", build_orphan_prune_query(file_id, marker))
     return Response(status_code=204)
 
 
 @app.delete("/item/{file_id}")
-async def delete_item(file_id: str):
-    await delete_resource("item", file_id)
+async def delete_item(file_id: str, isReleased: Optional[bool] = None):
+    await delete_resource("item", file_id, isReleased)
     return Response(status_code=204)
 
 
 @app.delete("/collection/{file_id}")
-async def delete_collection(file_id: str):
-    await delete_resource("collection", file_id)
-    await delete_collection_relation_index(file_id)
+async def delete_collection(file_id: str, isReleased: Optional[bool] = None):
+    await delete_by_query("collection", build_file_delete_query(file_id, isReleased))
+    await delete_collection_relation_index(file_id, isReleased)
     return Response(status_code=204)

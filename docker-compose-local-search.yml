@@ -1,0 +1,47 @@
+name: cudl-search-infra
+
+services:
+  solr:
+    build:
+      context: ${CUDL_SOLR_DIR:-../cudl-solr}/docker
+      dockerfile: Dockerfile
+    environment:
+      SOLR_JAVA_MEM: "-Xms1g -Xmx1g"
+    ports:
+      - "${SOLR_PORT:-8983}:8983"
+    volumes:
+      - ${CUDL_SOLR_DIR:-../cudl-solr}/external-vol:/var/solr
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl --fail --silent 'http://localhost:8983/solr/admin/cores?action=STATUS' >/dev/null
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  search-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      SOLR_HOST: solr
+      SOLR_PORT: 8983
+      API_PORT: 80
+      ENABLE_ORPHAN_PAGE_PRUNE: ${ENABLE_ORPHAN_PAGE_PRUNE:-false}
+      NUM_WORKERS: 5
+    ports:
+      - "${SEARCH_PORT:-80}:80"
+    depends_on:
+      solr:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:80/openapi.json', timeout=5)
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
