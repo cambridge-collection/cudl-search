@@ -934,7 +934,7 @@ async def get_items(
             if sort and re.search(r"collection_sort\s+(asc|desc)", sort.strip()):
                 collection_name_raw = re.sub(r"^collection-slug:", "", collection_facet)
                 collection_name = re.sub(r"\s", "_", collection_name_raw)
-                sort_field = "%s_sort" % collection_name
+                sort_field = "%s_collsort" % collection_name
                 sort = re.sub(
                     r"(^|\s|,)collection_sort\s+(asc|desc)",
                     r"\1%s \2" % sort_field,
