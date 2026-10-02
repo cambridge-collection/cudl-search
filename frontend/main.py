@@ -8,7 +8,9 @@ import requests
 import urllib.parse
 import uuid
 from datetime import datetime, timezone
+from functools import partial
 from typing import Union, List, Dict, Tuple, Optional
+from anyio import CapacityLimiter, to_thread
 from fastapi import FastAPI, Request, Query, HTTPException, Response
 
 logger = logging.getLogger("gunicorn.error")
@@ -28,6 +30,12 @@ ENABLE_ORPHAN_PAGE_PRUNE = os.environ.get(
 ).strip().lower() in {"1", "true", "yes", "on"}
 
 INTERNAL_ERROR_STATUS_CODE = 500
+
+SOLR_TIMEOUT = 60
+
+# Solr calls run off the event loop so a slow Solr cannot starve the gunicorn
+# heartbeat; one at a time per worker keeps Solr load unchanged.
+SOLR_LIMITER = CapacityLimiter(1)
 
 # Core names
 ITEM_CORE = "cdcp"
@@ -112,6 +120,12 @@ def http_exception_from_request_error(
     return HTTPException(status_code=status_code, detail=detail)
 
 
+async def call_solr(method, url: str, **kwargs) -> requests.Response:
+    return await to_thread.run_sync(
+        partial(method, url, timeout=SOLR_TIMEOUT, **kwargs), limiter=SOLR_LIMITER
+    )
+
+
 def add_release_status_scope(query, field, is_released=None):
     if is_released is not None:
         # Negate the opposite value (lowercase Solr literal, not str(bool)) so
@@ -141,11 +155,11 @@ async def delete_by_query(resource_type: str, query: str):
             status_code=INTERNAL_ERROR_STATUS_CODE, detail="Invalid resource type"
         )
     try:
-        r = requests.post(
-            url="%s/solr/%s/update" % (SOLR_URL, core),
+        r = await call_solr(
+            requests.post,
+            "%s/solr/%s/update" % (SOLR_URL, core),
             headers={"content-type": "application/json; charset=UTF-8"},
             json=delete_cmd,
-            timeout=60,
         )
         r.raise_for_status()
     except requests.exceptions.RequestException as e:
@@ -158,8 +172,8 @@ async def get_request(resource_type: str, **kwargs):
         solr_params = kwargs.copy()
         if "original_sort" in solr_params:
             del solr_params["original_sort"]
-        r = requests.get(
-            "%s/solr/%s/spell" % (SOLR_URL, core), params=solr_params, timeout=60
+        r = await call_solr(
+            requests.get, "%s/solr/%s/spell" % (SOLR_URL, core), params=solr_params
         )
         r.raise_for_status()
     except requests.exceptions.RequestException as e:
@@ -178,12 +192,12 @@ async def put_item(resource_type: str, data, params):
             status_code=INTERNAL_ERROR_STATUS_CODE, detail="Invalid resource type"
         )
     try:
-        r = requests.post(
-            url="%s/solr/%s/%s" % (SOLR_URL, core, path),
+        r = await call_solr(
+            requests.post,
+            "%s/solr/%s/%s" % (SOLR_URL, core, path),
             params=params,
             headers={"content-type": "application/json; charset=UTF-8"},
             data=data,
-            timeout=60,
         )
         r.raise_for_status()
     except requests.exceptions.RequestException as e:
@@ -198,12 +212,12 @@ async def put_docs(resource_type: str, docs: List[dict], params=None):
             status_code=INTERNAL_ERROR_STATUS_CODE, detail="Invalid resource type"
         )
     try:
-        r = requests.post(
-            url="%s/solr/%s/%s" % (SOLR_URL, core, path),
+        r = await call_solr(
+            requests.post,
+            "%s/solr/%s/%s" % (SOLR_URL, core, path),
             params=params,
             headers={"content-type": "application/json; charset=UTF-8"},
             data=json.dumps(docs),
-            timeout=60,
         )
         r.raise_for_status()
     except requests.exceptions.RequestException as e:
