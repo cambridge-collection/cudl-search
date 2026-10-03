@@ -35,6 +35,8 @@ COLLECTION_JSON_CORE = "collection"
 COLLECTION_RELATION_CORE = "collection_relation"
 
 ITEM_SCOPE_FIELD = "fileID_str"
+# Spatial fields: the place an item shows, and its place of origin
+ITEM_GEO_FIELDS = ("coverage_srpt", "origin_srpt")
 ITEM_MARKER_FIELD = "indexRunId_s"
 
 ITEM_EDGE_TYPE = "item"
@@ -272,6 +274,29 @@ def escape_solr_phrase_value(value: str) -> str:
 
 def escape_solr_local_param_single_quoted_value(value: str) -> str:
     return str(value).replace("\\", "\\\\").replace("'", "\\'")
+
+
+def build_bbox_filter(bbox: str) -> str:
+    """Turn bbox=west,south,east,north (decimal degrees) into a Solr spatial fq.
+
+    Matches items whose place shown or place of origin intersects the
+    box. west > east means the box crosses the antimeridian, which ENVELOPE
+    supports.
+    """
+    try:
+        west, south, east, north = (float(v) for v in bbox.split(","))
+    except ValueError:
+        raise HTTPException(
+            status_code=400, detail="bbox must be four numbers: west,south,east,north"
+        )
+    if not (-180 <= west <= 180 and -180 <= east <= 180):
+        raise HTTPException(status_code=400, detail="bbox longitudes must be -180..180")
+    if not (-90 <= south <= north <= 90):
+        raise HTTPException(
+            status_code=400, detail="bbox latitudes must be -90..90 with south <= north"
+        )
+    shape = "Intersects(ENVELOPE(%s, %s, %s, %s))" % (west, east, north, south)
+    return " OR ".join('%s:"%s"' % (field, shape) for field in ITEM_GEO_FIELDS)
 
 
 def extract_translated_text(value) -> Union[str, None]:
@@ -919,6 +944,7 @@ async def get_items(
     sort: Union[str, None] = None,
     start: Union[str, None] = None,
     rows: Union[int, None] = None,
+    bbox: Union[str, None] = None,
 ):
     original_sort = None
     r = re.compile("^collection-slug:")
@@ -941,6 +967,9 @@ async def get_items(
                     sort,
                 )
 
+    if bbox:
+        fq = (fq or []) + [build_bbox_filter(bbox)]
+
     q_final = " AND ".join(q) if hasattr(q, "__iter__") else q
     rows_final = rows if rows in [8, 20] else 20
 
@@ -956,6 +985,41 @@ async def get_items(
     }
     r = await get_request("items", **params)
     return r
+
+
+# Upper bound on locations returned for a map; the geo collections hold ~3,000 items
+ITEM_LOCATIONS_MAX_ROWS = 5000
+
+
+@app.get("/items/locations")
+async def get_item_locations(
+    q: List[str] = Query(default=None),
+    fq: List[str] = Query(default=None),
+    bbox: Union[str, None] = None,
+):
+    """One compact doc per matching item that has a location, for drawing a map.
+
+    Takes the same search parameters as /items, but returns every match (up to
+    ITEM_LOCATIONS_MAX_ROWS) collapsed to one doc per item, with only the fields
+    a map needs and no facets or highlighting.
+    """
+    fq = list(fq or [])
+    if bbox:
+        fq.append(build_bbox_filter(bbox))
+    fq.append(" OR ".join("%s:*" % field for field in ITEM_GEO_FIELDS))
+    fq.append("{!collapse field=fileID_s}")
+
+    q_final = " AND ".join(q) if hasattr(q, "__iter__") else q
+    params = {
+        "q": q_final,
+        "fq": fq,
+        "rows": ITEM_LOCATIONS_MAX_ROWS,
+        "fl": "fileID,documentTitle,title,sequence,coverage_srpt,origin_p",
+        "facet": "false",
+        "hl": "false",
+        "spellcheck": "false",
+    }
+    return await get_request("items", **params)
 
 
 @app.get("/summary")
