@@ -31,7 +31,11 @@ ENABLE_ORPHAN_PAGE_PRUNE = os.environ.get(
 
 INTERNAL_ERROR_STATUS_CODE = 500
 
-SOLR_TIMEOUT = 60
+# Reads give up after /spell's timeAllowed (15s) so partial results still
+# arrive. Writes give up just before the listener's 120s request timeout so the
+# caller gets this API's error rather than the listener's 504.
+SOLR_READ_TIMEOUT = 30
+SOLR_WRITE_TIMEOUT = 110
 SOLR_ADMISSION_TIMEOUT = 10
 
 # Solr calls run off the event loop so a slow Solr cannot starve the gunicorn
@@ -125,9 +129,9 @@ def http_exception_from_request_error(
 
 async def call_solr(method, url: str, **kwargs) -> requests.Response:
     if method is requests.get:
-        limiter, kind = SOLR_READ_LIMITER, "read"
+        limiter, kind, timeout = SOLR_READ_LIMITER, "read", SOLR_READ_TIMEOUT
     else:
-        limiter, kind = SOLR_WRITE_LIMITER, "write"
+        limiter, kind, timeout = SOLR_WRITE_LIMITER, "write", SOLR_WRITE_TIMEOUT
 
     try:
         with fail_after(SOLR_ADMISSION_TIMEOUT):
@@ -150,7 +154,7 @@ async def call_solr(method, url: str, **kwargs) -> requests.Response:
 
     try:
         return await to_thread.run_sync(
-            partial(method, url, timeout=SOLR_TIMEOUT, **kwargs)
+            partial(method, url, timeout=timeout, **kwargs)
         )
     finally:
         limiter.release()
