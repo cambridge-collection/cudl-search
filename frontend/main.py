@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime, timezone
 from functools import partial
 from typing import Union, List, Dict, Tuple, Optional
-from anyio import CapacityLimiter, to_thread
+from anyio import CapacityLimiter, fail_after, to_thread
 from fastapi import FastAPI, Request, Query, HTTPException, Response
 
 logger = logging.getLogger("gunicorn.error")
@@ -32,10 +32,13 @@ ENABLE_ORPHAN_PAGE_PRUNE = os.environ.get(
 INTERNAL_ERROR_STATUS_CODE = 500
 
 SOLR_TIMEOUT = 60
+SOLR_ADMISSION_TIMEOUT = 10
 
 # Solr calls run off the event loop so a slow Solr cannot starve the gunicorn
-# heartbeat; one at a time per worker keeps Solr load unchanged.
-SOLR_LIMITER = CapacityLimiter(1)
+# heartbeat. Reads and writes are limited separately, one at a time each per
+# worker, so search traffic cannot queue ahead of the indexer.
+SOLR_READ_LIMITER = CapacityLimiter(1)
+SOLR_WRITE_LIMITER = CapacityLimiter(1)
 
 # Core names
 ITEM_CORE = "cdcp"
@@ -121,9 +124,36 @@ def http_exception_from_request_error(
 
 
 async def call_solr(method, url: str, **kwargs) -> requests.Response:
-    return await to_thread.run_sync(
-        partial(method, url, timeout=SOLR_TIMEOUT, **kwargs), limiter=SOLR_LIMITER
-    )
+    if method is requests.get:
+        limiter, kind = SOLR_READ_LIMITER, "read"
+    else:
+        limiter, kind = SOLR_WRITE_LIMITER, "write"
+
+    try:
+        with fail_after(SOLR_ADMISSION_TIMEOUT):
+            await limiter.acquire()
+    except TimeoutError:
+        limiter_stats = limiter.statistics()
+        logger.warning(
+            "Solr %s admission timed out for %s: borrowed=%s total=%s waiting=%s",
+            kind,
+            url,
+            limiter_stats.borrowed_tokens,
+            limiter_stats.total_tokens,
+            limiter_stats.tasks_waiting,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Solr request capacity exhausted",
+            headers={"Retry-After": str(SOLR_ADMISSION_TIMEOUT)},
+        )
+
+    try:
+        return await to_thread.run_sync(
+            partial(method, url, timeout=SOLR_TIMEOUT, **kwargs)
+        )
+    finally:
+        limiter.release()
 
 
 def add_release_status_scope(query, field, is_released=None):
