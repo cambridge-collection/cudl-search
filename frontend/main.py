@@ -967,7 +967,13 @@ async def get_items(
     sort: Union[str, None] = None,
     start: Union[str, None] = None,
     rows: Union[int, None] = None,
+    facet_limit: Union[int, None] = Query(default=None, alias="facet.limit"),
 ):
+    # 201 = 200 shown + 1 so the viewer can tell whether more values exist
+    if facet_limit is not None and facet_limit != -1 and not 1 <= facet_limit <= 201:
+        raise HTTPException(
+            status_code=422, detail="facet.limit must be -1 or from 1 to 201"
+        )
     original_sort = None
     r = re.compile("^collection-slug:")
 
@@ -1001,6 +1007,7 @@ async def get_items(
         "start": start,
         "rows": rows_final,
         "original_sort": original_sort,
+        "facet.limit": facet_limit,
     }
     r = await get_request("items", **params)
     return r
