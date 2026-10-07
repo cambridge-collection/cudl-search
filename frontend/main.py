@@ -57,6 +57,17 @@ SUBCOLLECTION_EDGE_TYPE = "subcollection"
 COLLECTION_REF_PREFIX = "collections/"
 COLLECTION_REF_SUFFIX = ".collection.json"
 
+# Parents reference children as tokenised "collections/<id>.collection.json"
+# paths, so children are excluded via the relation core's plain child ids.
+TOP_LEVEL_COLLECTIONS_FQ = (
+    f"-{{!join fromIndex={COLLECTION_RELATION_CORE} from=child_collection_id_s "
+    f"to=id v='edge_type_s:{SUBCOLLECTION_EDGE_TYPE}'}}"
+)
+# The fields the viewer's "View all collections" panels render.
+TOP_LEVEL_COLLECTIONS_FL = "id,name.full,isReleased,status"
+TOP_LEVEL_COLLECTIONS_SORT = "name.full_s asc"
+TOP_LEVEL_COLLECTIONS_ROWS = 1000
+
 app = FastAPI()
 
 FACET_LABELS = {
@@ -938,15 +949,26 @@ async def get_collections(
     sort: Union[str, None] = None,
     start: Union[str, None] = None,
     rows: Union[int, None] = None,
+    topLevel: bool = False,
 ):
     q_final = " AND ".join(q) if hasattr(q, "__iter__") else q
     rows_final = rows if rows in [8, 20] else 20
+    fl = None
+
+    if topLevel:
+        q_final = q_final or "*:*"
+        fq = (fq or []) + [TOP_LEVEL_COLLECTIONS_FQ]
+        sort = sort or TOP_LEVEL_COLLECTIONS_SORT
+        if rows is None:
+            rows_final = TOP_LEVEL_COLLECTIONS_ROWS
+        fl = TOP_LEVEL_COLLECTIONS_FL
 
     # Limit params passed through to SOLR
     # Add facet to exclude collections from results
     params = {
         "q": q_final,
         "fq": fq,
+        "fl": fl,
         "sort": sort,
         "start": start,
         "rows": rows_final,
