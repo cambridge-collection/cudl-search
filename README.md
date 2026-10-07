@@ -44,3 +44,11 @@ To remove every document from the local item index:
 ## Accessing the API
 
 The API will be available on port defined in `API_PORT`. If set to 90, it would be available at [http://localhost:90/items?q=*](http://localhost:90/items?q=*).If set to 80, it would be available at [http://localhost/items?q=*](http://localhost/items?q=*)
+
+## Facet value limits
+
+`GET /items` accepts `facet.limit`, and per-field limits such as
+`f.facet-subjects.facet.limit`, of `-1` (every value) or a positive number.
+Anything else returns a 422. The viewer's search sidebar sets its own limit
+(cudl-viewer's `searchFacetLimit` property); nothing here needs to change with
+it.
