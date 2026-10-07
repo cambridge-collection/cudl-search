@@ -960,20 +960,44 @@ async def get_collections(
     return r
 
 
+FIELD_FACET_LIMIT_PARAM = re.compile(r"^f\.facet-[A-Za-z-]+\.facet\.limit$")
+
+
+def is_valid_facet_limit(limit: int) -> bool:
+    return limit == -1 or limit >= 1
+
+
+def field_facet_limits(request: Request) -> Dict[str, int]:
+    limits = {}
+    for name, value in request.query_params.multi_items():
+        if not (name.startswith("f.") and name.endswith(".facet.limit")):
+            continue
+        if not FIELD_FACET_LIMIT_PARAM.match(name):
+            raise HTTPException(status_code=422, detail="unknown parameter %s" % name)
+        if not re.fullmatch(r"-?\d+", value) or not is_valid_facet_limit(int(value)):
+            raise HTTPException(
+                status_code=422, detail="%s must be -1 or a positive number" % name
+            )
+        limits[name] = int(value)
+    return limits
+
+
 @app.get("/items")
 async def get_items(
+    request: Request,
     q: List[str] = Query(default=None),
     fq: List[str] = Query(default=None),
     sort: Union[str, None] = None,
     start: Union[str, None] = None,
     rows: Union[int, None] = None,
+    facet: Union[bool, None] = None,
     facet_limit: Union[int, None] = Query(default=None, alias="facet.limit"),
 ):
-    # 201 = 200 shown + 1 so the viewer can tell whether more values exist
-    if facet_limit is not None and facet_limit != -1 and not 1 <= facet_limit <= 201:
+    if facet_limit is not None and not is_valid_facet_limit(facet_limit):
         raise HTTPException(
-            status_code=422, detail="facet.limit must be -1 or from 1 to 201"
+            status_code=422, detail="facet.limit must be -1 or a positive number"
         )
+    field_limits = field_facet_limits(request)
     original_sort = None
     r = re.compile("^collection-slug:")
 
@@ -996,7 +1020,7 @@ async def get_items(
                 )
 
     q_final = " AND ".join(q) if hasattr(q, "__iter__") else q
-    rows_final = rows if rows in [8, 20] else 20
+    rows_final = rows if rows in [0, 8, 20] else 20
 
     # Limit params passed through to SOLR
     # Add facet to exclude collections from results
@@ -1007,7 +1031,9 @@ async def get_items(
         "start": start,
         "rows": rows_final,
         "original_sort": original_sort,
+        "facet": facet,
         "facet.limit": facet_limit,
+        **field_limits,
     }
     r = await get_request("items", **params)
     return r
