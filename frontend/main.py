@@ -982,7 +982,44 @@ async def get_collections(
     return r
 
 
-FIELD_FACET_LIMIT_PARAM = re.compile(r"^f\.facet-[A-Za-z-]+\.facet\.limit$")
+FIELD_FACET_LIMIT_PARAM = re.compile(r"^f\.facet-[A-Za-z0-9-]+\.facet\.limit$")
+
+# Solr replaces its whole default facet.field list when a request sends one, so /items
+# always sends this full list. Keep it in step with the cdcp solrconfig.xml defaults,
+# which still drive searcher warming.
+ITEM_FACET_FIELDS = [
+    "facet-collection",
+    "facet-collection-0",
+    "facet-collection-prefixes-1",
+    "facet-subjects",
+    "facet-pageHasTranscription",
+    "facet-pageHasTranslation",
+    "facet-origin-place",
+    "facet-languages",
+    "facet-creations-century",
+    "facet-hasPage",
+    "facet-itemStatus",
+    "facet-itemLevel",
+]
+COLLECTION_LEVEL_FQ = re.compile(r"^facet-collection-(\d+):")
+
+
+def item_facet_params(fq: Optional[List[str]]) -> Dict[str, Union[List[str], int]]:
+    fields = list(ITEM_FACET_FIELDS)
+    for filter_query in fq or []:
+        match = COLLECTION_LEVEL_FQ.match(filter_query)
+        if match:
+            level = int(match.group(1))
+            fields += [
+                "facet-collection-%d" % (level + 1),
+                "facet-collection-prefixes-%d" % (level + 2),
+            ]
+    fields = dedupe_preserve_order(fields)
+    params = {"facet.field": fields}
+    for field in fields:
+        if field.startswith("facet-collection-"):
+            params["f.%s.facet.limit" % field] = -1
+    return params
 
 
 def is_valid_facet_limit(limit: int) -> bool:
@@ -1055,6 +1092,7 @@ async def get_items(
         "original_sort": original_sort,
         "facet": facet,
         "facet.limit": facet_limit,
+        **item_facet_params(fq),
         **field_limits,
     }
     r = await get_request("items", **params)
