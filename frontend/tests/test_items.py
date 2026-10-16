@@ -25,8 +25,9 @@ def request_with_query(query_string=""):
     return Request({"type": "http", "query_string": query_string.encode()})
 
 
-class GetItemsFacetLimitTests(unittest.IsolatedAsyncioTestCase):
-    async def solr_query(self, query_string="", rows=8, facet=None, facet_limit=None):
+class GetItemsTestCase(unittest.IsolatedAsyncioTestCase):
+    async def solr_query(self, query_string="", rows=8, facet=None, facet_limit=None,
+                         fq=("collection-slug:newton",)):
         calls = []
 
         async def fake_call_solr(method, url, **call_kwargs):
@@ -36,12 +37,14 @@ class GetItemsFacetLimitTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(main, "call_solr", fake_call_solr):
             await main.get_items(
                 request=request_with_query(query_string),
-                q=None, fq=["collection-slug:newton"], sort=None, start=None,
+                q=None, fq=list(fq), sort=None, start=None,
                 rows=rows, facet=facet, facet_limit=facet_limit,
             )
         url = requests.Request("GET", "http://solr/", params=calls[0]).prepare().url
         return urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
 
+
+class GetItemsFacetLimitTests(GetItemsTestCase):
     async def test_facet_limit_is_passed_to_solr(self):
         for limit in (-1, 1, 201, 5000):
             query = await self.solr_query(facet_limit=limit)
@@ -78,6 +81,8 @@ class GetItemsFacetLimitTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(query["f.facet-subjects.facet.limit"], ["-1"])
         self.assertEqual(query["f.facet-origin-place.facet.limit"], ["201"])
+        query = await self.solr_query("f.facet-collection-1.facet.limit=5")
+        self.assertEqual(query["f.facet-collection-1.facet.limit"], ["5"])
 
     async def test_other_field_params_are_not_sent_to_solr(self):
         query = await self.solr_query("f.facet-subjects.facet.sort=index")
@@ -95,6 +100,56 @@ class GetItemsFacetLimitTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(HTTPException) as ctx:
                 await self.solr_query("f.facet-subjects.facet.limit=" + value)
             self.assertEqual(ctx.exception.status_code, 422)
+
+
+class GetItemsCollectionFacetTests(GetItemsTestCase):
+    async def test_base_facet_fields_are_sent_without_a_collection_filter(self):
+        query = await self.solr_query()
+        self.assertEqual(query["facet.field"], main.ITEM_FACET_FIELDS)
+        self.assertIn("facet-collection-0", query["facet.field"])
+        self.assertIn("facet-collection-prefixes-1", query["facet.field"])
+        self.assertNotIn("facet-collection-1", query["facet.field"])
+        self.assertEqual(query["f.facet-collection-0.facet.limit"], ["-1"])
+        self.assertEqual(query["f.facet-collection-prefixes-1.facet.limit"], ["-1"])
+        self.assertNotIn("f.facet-collection.facet.limit", query)
+
+    async def test_collection_level_filter_adds_the_next_level(self):
+        query = await self.solr_query(
+            fq=['facet-collection-0:"Royal Greenwich Observatory Archives"']
+        )
+        self.assertEqual(
+            query["facet.field"],
+            main.ITEM_FACET_FIELDS + ["facet-collection-1", "facet-collection-prefixes-2"],
+        )
+        self.assertEqual(query["f.facet-collection-1.facet.limit"], ["-1"])
+        self.assertEqual(query["f.facet-collection-prefixes-2.facet.limit"], ["-1"])
+
+    async def test_each_collection_level_filter_adds_its_next_level_once(self):
+        query = await self.solr_query(fq=[
+            'facet-collection-0:"Royal Greenwich Observatory Archives"',
+            'facet-collection-0:"Treasures of the Library"',
+            'facet-collection-1:"Royal Greenwich Observatory Archives::Papers of Nevil Maskelyne"',
+        ])
+        self.assertEqual(
+            query["facet.field"],
+            main.ITEM_FACET_FIELDS + [
+                "facet-collection-1", "facet-collection-prefixes-2",
+                "facet-collection-2", "facet-collection-prefixes-3",
+            ],
+        )
+
+    async def test_global_facet_limit_does_not_truncate_collection_fields(self):
+        query = await self.solr_query(
+            facet_limit=10, fq=['facet-collection-0:"Thomas Hobson"']
+        )
+        self.assertEqual(query["facet.limit"], ["10"])
+        for field in ("facet-collection-0", "facet-collection-prefixes-1",
+                      "facet-collection-1", "facet-collection-prefixes-2"):
+            self.assertEqual(query["f.%s.facet.limit" % field], ["-1"])
+
+    async def test_explicit_field_limit_overrides_collection_default(self):
+        query = await self.solr_query("f.facet-collection-0.facet.limit=5")
+        self.assertEqual(query["f.facet-collection-0.facet.limit"], ["5"])
 
 
 if __name__ == "__main__":

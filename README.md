@@ -51,4 +51,5 @@ The API will be available on port defined in `API_PORT`. If set to 90, it would 
 `f.facet-subjects.facet.limit`, of `-1` (every value) or a positive number.
 Anything else returns a 422. The viewer's search sidebar sets its own limit
 (cudl-viewer's `searchFacetLimit` property); nothing here needs to change with
-it.
+it. `facet.limit` doesn't apply to the `facet-collection-*` fields, which return
+every value unless given their own `f.<field>.facet.limit`.
