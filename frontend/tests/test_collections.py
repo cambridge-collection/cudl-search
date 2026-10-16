@@ -66,3 +66,65 @@ class GetCollectionsTopLevelTests(unittest.IsolatedAsyncioTestCase):
         for param in ("q", "fq", "fl", "sort"):
             self.assertNotIn(param, query)
         self.assertEqual(query["rows"], ["20"])
+
+
+class GetCollectionDigestsTests(unittest.IsolatedAsyncioTestCase):
+    async def call_digests(self, q=None, start=None, rows=None, response=None):
+        calls = []
+        response = response or FakeResponse()
+
+        async def fake_call_solr(method, url, **call_kwargs):
+            calls.append(call_kwargs["params"])
+            return response
+
+        with patch.object(main, "call_solr", fake_call_solr):
+            result = await main.get_collection_digests(q=q, start=start, rows=rows)
+        url = requests.Request("GET", "http://solr/", params=calls[0]).prepare().url
+        return urllib.parse.parse_qs(urllib.parse.urlparse(url).query), result
+
+    async def solr_query(self, q=None, start=None, rows=None):
+        query, _ = await self.call_digests(q=q, start=start, rows=rows)
+        return query
+
+    async def test_q_reaches_solr_unchanged(self):
+        query = await self.solr_query(q=['id:"a\\"b"'])
+        self.assertEqual(query["q"], ['id:"a\\"b"'])
+
+    async def test_repeated_q_values_are_joined_with_and(self):
+        query = await self.solr_query(q=['id:"newton"', "isReleased:true"])
+        self.assertEqual(query["q"], ['id:"newton" AND isReleased:true'])
+
+    async def test_fixed_params_are_sent(self):
+        query = await self.solr_query(q=['id:"newton"'])
+        self.assertEqual(query["fl"], ["id,items_sha256_s"])
+        self.assertEqual(query["spellcheck"], ["false"])
+        self.assertEqual(query["facet"], ["false"])
+
+    async def test_rows(self):
+        for rows, expected in ((None, "20"), (8, "8"), (20, "20"), (1000, "20")):
+            with self.subTest(rows=rows):
+                query = await self.solr_query(q=['id:"newton"'], rows=rows)
+                self.assertEqual(query["rows"], [expected])
+
+    async def test_start(self):
+        query = await self.solr_query(q=['id:"newton"'])
+        self.assertNotIn("start", query)
+        query = await self.solr_query(q=['id:"newton"'], start="20")
+        self.assertEqual(query["start"], ["20"])
+
+    async def test_solr_response_is_returned_unchanged(self):
+        body = {
+            "responseHeader": {"params": {}},
+            "response": {
+                "numFound": 1,
+                "start": 0,
+                "docs": [{"id": "newton", "items_sha256_s": "0" * 64}],
+            },
+        }
+
+        class DigestResponse(FakeResponse):
+            def json(self):
+                return body
+
+        _, result = await self.call_digests(q=['id:"newton"'], response=DigestResponse())
+        self.assertEqual(result, body)

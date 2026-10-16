@@ -982,6 +982,25 @@ async def get_collections(
     return r
 
 
+@app.get("/collections/digest")
+async def get_collection_digests(
+    q: List[str] = Query(default=None),
+    start: Union[str, None] = None,
+    rows: Union[int, None] = None,
+):
+    q_final = " AND ".join(q) if hasattr(q, "__iter__") else q
+    rows_final = rows if rows in [8, 20] else 20
+    return await get_request(
+        "collections",
+        q=q_final,
+        fl="id,items_sha256_s",
+        start=start,
+        rows=rows_final,
+        spellcheck="false",
+        facet="false",
+    )
+
+
 FIELD_FACET_LIMIT_PARAM = re.compile(r"^f\.facet-[A-Za-z0-9-]+\.facet\.limit$")
 
 # Solr replaces its whole default facet.field list when a request sends one, so /items
