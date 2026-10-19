@@ -982,7 +982,7 @@ async def get_collections(
     return r
 
 
-@app.get("/collections/digest")
+@app.get("/collections/digests")
 async def get_collection_digests(
     q: List[str] = Query(default=None),
     start: Union[str, None] = None,
