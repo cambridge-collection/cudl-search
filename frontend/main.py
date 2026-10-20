@@ -1019,6 +1019,7 @@ ITEM_FACET_FIELDS = [
     "facet-hasPage",
     "facet-itemStatus",
     "facet-itemLevel",
+    "facet-collectionCount",
 ]
 COLLECTION_LEVEL_FQ = re.compile(r"^facet-collection-(\d+):")
 
