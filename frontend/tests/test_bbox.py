@@ -13,15 +13,15 @@ class BboxFilterTests(unittest.TestCase):
     def test_builds_intersects_envelope(self):
         self.assertEqual(
             main.build_bbox_filter("0.1,52.1,0.2,52.3"),
-            'coverage_srpt:"Intersects(ENVELOPE(0.1, 0.2, 52.3, 52.1))"'
-            ' OR origin_srpt:"Intersects(ENVELOPE(0.1, 0.2, 52.3, 52.1))"',
+            'coverage_srpts:"Intersects(ENVELOPE(0.1, 0.2, 52.3, 52.1))"'
+            ' OR origin_srpts:"Intersects(ENVELOPE(0.1, 0.2, 52.3, 52.1))"',
         )
 
     def test_allows_antimeridian_crossing(self):
         self.assertEqual(
             main.build_bbox_filter("170,-50,-170,-30"),
-            'coverage_srpt:"Intersects(ENVELOPE(170.0, -170.0, -30.0, -50.0))"'
-            ' OR origin_srpt:"Intersects(ENVELOPE(170.0, -170.0, -30.0, -50.0))"',
+            'coverage_srpts:"Intersects(ENVELOPE(170.0, -170.0, -30.0, -50.0))"'
+            ' OR origin_srpts:"Intersects(ENVELOPE(170.0, -170.0, -30.0, -50.0))"',
         )
 
     def test_rejects_malformed_input(self):

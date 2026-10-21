@@ -36,7 +36,7 @@ COLLECTION_RELATION_CORE = "collection_relation"
 
 ITEM_SCOPE_FIELD = "fileID_str"
 # Spatial fields: the place an item shows, and its place of origin
-ITEM_GEO_FIELDS = ("coverage_srpt", "origin_srpt")
+ITEM_GEO_FIELDS = ("coverage_srpts", "origin_srpts")
 ITEM_MARKER_FIELD = "indexRunId_s"
 
 ITEM_EDGE_TYPE = "item"
@@ -1014,7 +1014,7 @@ async def get_item_locations(
         "q": q_final,
         "fq": fq,
         "rows": ITEM_LOCATIONS_MAX_ROWS,
-        "fl": "fileID,documentTitle,title,sequence,coverage_srpt,origin_p",
+        "fl": "fileID,documentTitle,title,sequence,coverage_srpts,origin_ps",
         "facet": "false",
         "hl": "false",
         "spellcheck": "false",
