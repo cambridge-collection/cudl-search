@@ -109,6 +109,7 @@ class GetItemsCollectionFacetTests(GetItemsTestCase):
         self.assertIn("facet-collection-0", query["facet.field"])
         self.assertIn("facet-collection-prefixes-1", query["facet.field"])
         self.assertNotIn("facet-collection-1", query["facet.field"])
+        self.assertIn("facet-collectionCount", query["facet.field"])
         self.assertEqual(query["f.facet-collection-0.facet.limit"], ["-1"])
         self.assertEqual(query["f.facet-collection-prefixes-1.facet.limit"], ["-1"])
         self.assertNotIn("f.facet-collection.facet.limit", query)
